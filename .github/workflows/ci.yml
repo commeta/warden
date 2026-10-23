@@ -20,7 +20,7 @@ jobs:
         rust: [stable, "1.88"]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.rust }}
           components: clippy, rustfmt
@@ -31,7 +31,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test (as root — exercises procfs, pidfd, fanotify, the end-to-end daemon test)
-        run: sudo -E "$(command -v cargo)" test --workspace --locked
+        run: sudo -E env "PATH=$PATH" cargo test --workspace --locked
 
   # Known-vulnerable dependencies and unused ones fail the build: both used to
   # surface only in a manual review.
@@ -60,11 +60,12 @@ jobs:
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq strace nftables
       - run: cargo build --release --locked -p wardend -p wardenctl
       - name: Seccomp filter covers every syscall the daemon uses
-        run: sudo ./scripts/check-seccomp.sh ./target/release/wardend 20
+        run: |
+          sudo -E env "PATH=$PATH" bash -lc 'cd "$GITHUB_WORKSPACE" && ./scripts/check-seccomp.sh ./target/release/wardend 20'
       - name: Install (dry-run) and start the unit
         run: |
           sudo mkdir -p /var/www/html && echo '<?php echo 1;' | sudo tee /var/www/html/index.php >/dev/null
-          sudo ./scripts/install.sh --no-build --profile webserver --enable --start
+          sudo -E env "PATH=$PATH" bash -lc 'cd "$GITHUB_WORKSPACE" && ./scripts/install.sh --no-build --profile webserver --enable --start'
       - name: Service stays up and healthy
         run: |
           sleep 45
