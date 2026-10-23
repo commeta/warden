@@ -1,0 +1,17 @@
+{
+  "wardend": "wardend-0.12.0",
+  "execs": 1800,
+  "exec_per_sec": 397,
+  "cpu_us_per_exec": 150.0,
+  "syscalls_per_exec": 24.1,
+  "opens_per_exec": 5.3,
+  "by_syscall": {
+    "read": 7.34,
+    "openat": 5.34,
+    "close": 5.34,
+    "recvmmsg": 3.42,
+    "poll": 1.64,
+    "readlink": 1.0,
+    "mprotect": 0.0
+  }
+}
