@@ -1,0 +1,24 @@
+[package]
+name = "warden-sys"
+description = "Warden: Linux system interface — procfs/sysfs parsers, PSI triggers, cgroup v2, pidfd, netlink proc connector, fanotify, /dev/kmsg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+libc.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+
+[features]
+# `clock::simulate_suspend` for tests of other crates (never in a release build)
+test-util = []
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
