@@ -1,0 +1,1 @@
+[Tue Oct 20 12:00:00.123456 2026] [security2:error] [pid 1:tid 2] [client 203.0.113.5:51234] ModSecurity: Access denied with code 403 (phase 2). [id "949110"] [msg "Inbound Anomaly Score Exceeded"] [severity "CRITICAL"] [hostname "example.com"] [uri "/index.php"]

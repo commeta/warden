@@ -1,0 +1,1 @@
+36 35 98:0 /mnt1 /mnt\040with\040space rw,noatime master:1 - ext4 /dev/root rw,errors=continue

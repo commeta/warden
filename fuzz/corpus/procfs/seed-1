@@ -1,0 +1,10 @@
+Name:	php-fpm
+Umask:	0022
+State:	S (sleeping)
+Tgid:	7
+Pid:	7
+PPid:	1
+Uid:	33	33	33	33
+Gid:	33	33	33	33
+VmRSS:	  1024 kB
+VmSwap:	0 kB

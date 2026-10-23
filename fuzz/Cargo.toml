@@ -1,0 +1,83 @@
+# cargo-fuzz targets for the parsers of untrusted input. The bodies live in
+# crates/warden-fuzz (where `cargo test` also runs them on stable); this
+# crate only wires them to libFuzzer. Needs nightly:
+#
+#   cargo install cargo-fuzz
+#   cargo +nightly fuzz run access_log -- -max_total_time=60
+#
+# CI runs every target for a minute on each pull request (fuzz job).
+[package]
+name = "warden-fuzz-targets"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+warden-fuzz = { path = "../crates/warden-fuzz" }
+
+# not part of the main workspace (nightly-only build)
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "access_log"
+path = "fuzz_targets/access_log.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "modsecurity"
+path = "fuzz_targets/modsecurity.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dbus"
+path = "fuzz_targets/dbus.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proc_connector"
+path = "fuzz_targets/proc_connector.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fanotify"
+path = "fuzz_targets/fanotify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "procfs"
+path = "fuzz_targets/procfs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "auth_log"
+path = "fuzz_targets/auth_log.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "redact"
+path = "fuzz_targets/redact.rs"
+test = false
+doc = false
+bench = false

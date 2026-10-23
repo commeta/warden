@@ -1,0 +1,1 @@
+2026/10/20 12:00:00 [error] 1#1: *5 [client 198.51.100.9] ModSecurity: Access denied with code 403 (phase 2). [id "949110"] [severity "0"] [hostname "10.0.0.1"] [uri "/"], client: 198.51.100.9, server: example.com
