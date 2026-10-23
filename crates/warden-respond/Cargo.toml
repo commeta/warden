@@ -1,0 +1,26 @@
+[package]
+name = "warden-respond"
+description = "Warden: guarded remediation actions (kill, contain, cleanup, quarantine, firewall, snapshots)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+warden-core.workspace = true
+warden-sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+humantime.workspace = true
+tracing.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+warden-sys = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
