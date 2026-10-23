@@ -1,0 +1,77 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/warden-core",
+    "crates/warden-sys",
+    "crates/warden-detect",
+    "crates/warden-respond",
+    "crates/wardend",
+    "crates/wardenctl",
+    "crates/warden-fuzz",
+]
+# cargo-fuzz targets (nightly, libFuzzer): see fuzz/README.md
+exclude = ["fuzz"]
+
+[workspace.package]
+version = "0.14.1"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+authors = ["Warden contributors"]
+repository = "https://github.com/commeta/warden"
+homepage = "https://github.com/commeta/warden"
+keywords = ["linux", "monitoring", "psi", "security", "daemon"]
+categories = ["command-line-utilities", "os::linux-apis"]
+
+[workspace.dependencies]
+warden-core = { path = "crates/warden-core", version = "0.14.1" }
+warden-sys = { path = "crates/warden-sys", version = "0.14.1" }
+warden-detect = { path = "crates/warden-detect", version = "0.14.1" }
+warden-respond = { path = "crates/warden-respond", version = "0.14.1" }
+
+anyhow = "1"
+thiserror = "2"
+libc = "0.2.170"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+tokio = { version = "1.40", features = ["rt", "macros", "signal", "net", "time", "sync", "io-util"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+blake3 = "1.5"
+md-5 = "0.10"
+regex = "1.10"
+globset = "0.4"
+humantime = "2"
+humantime-serde = "1"
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+# panic = "unwind" is intentional: sensor threads are supervised and restarted
+# after a panic instead of taking the whole daemon down.
+strip = "symbols"
+
+[profile.dev]
+debug = 1
+
+# `cargo build --profile profiling`: release code with symbols, for
+# valgrind/DHAT/perf (bench/profile.py works with either build).
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = "none"
+lto = "thin"
+codegen-units = 16
