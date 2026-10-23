@@ -1,0 +1,82 @@
+[package]
+name = "wardend"
+description = "Warden host guardian daemon: stability (PSI, swap storms, disks, limits) and intrusion detection with automatic remediation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+
+[[bin]]
+name = "wardend"
+path = "src/main.rs"
+
+[dependencies]
+warden-core.workspace = true
+warden-sys.workspace = true
+warden-detect.workspace = true
+warden-respond.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+ureq.workspace = true
+
+[features]
+default = ["alloc-stats"]
+# Attribute heap usage to modules (`wardenctl profile`). Costs a 16-byte
+# header and a few atomic adds per allocation.
+alloc-stats = []
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+# `cargo deb -p wardend` builds a Debian package with both binaries,
+# the systemd unit, the reference configuration and signature samples.
+[package.metadata.deb]
+name = "warden"
+maintainer = "Warden contributors"
+copyright = "Warden contributors"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Warden is a host guardian daemon for Linux servers and workstations. It \
+detects memory pressure (PSI) and swap storms before the OOM killer, disk \
+exhaustion, resource limits, hardware and kernel faults, and intrusions \
+(privilege escalation, webshells, reverse shells, miners, persistence), \
+and remediates them automatically under strict safety rules."""
+# "$auto" = what dpkg-shlibdeps reads from the binaries, so the floor is
+# honest for wherever they were built. Release packages are built on the
+# oldest supported base (scripts/build-deb.sh --portable, CI: Ubuntu 22.04),
+# which gives libc6 (>= 2.34) and installs on Debian 12 and Ubuntu 22.04;
+# scripts/check-glibc.sh fails a release whose binaries need more.
+depends = "$auto, systemd"
+recommends = "nftables"
+section = "admin"
+priority = "optional"
+conf-files = ["/etc/warden/warden.toml"]
+maintainer-scripts = "../../packaging/deb/"
+# restart-after-upgrade = false: postinst restarts the daemon itself, and only
+# if the configuration validates with the new binary (packaging/deb/postinst);
+# stop-on-upgrade = false: the old daemon keeps running until then.
+systemd-units = { unit-name = "wardend", unit-scripts = "../../packaging/systemd", enable = false, start = false, restart-after-upgrade = false, stop-on-upgrade = false }
+assets = [
+    ["target/release/wardend", "usr/sbin/", "755"],
+    ["target/release/wardenctl", "usr/bin/", "755"],
+    ["../../config/warden.toml", "etc/warden/warden.toml", "640"],
+    ["../../config/conf.d/*", "usr/share/warden/examples/conf.d/", "644"],
+    ["../../config/signatures/*", "usr/share/warden/signatures/", "644"],
+    ["../../packaging/nftables/warden.nft", "usr/share/warden/warden.nft", "644"],
+    ["../../README.md", "usr/share/doc/warden/README.md", "644"],
+    ["../../CHANGELOG.md", "usr/share/doc/warden/CHANGELOG.md", "644"],
+    ["../../docs/*", "usr/share/doc/warden/", "644"],
+]
