@@ -1,0 +1,110 @@
+[Unit]
+Description=Warden host guardian (stability & intrusion detection with auto-remediation)
+Documentation=https://github.com/commeta/warden
+# Start early and stop late so Warden watches as much of the boot/shutdown as possible.
+DefaultDependencies=no
+After=local-fs.target systemd-sysctl.service systemd-journald.socket
+Requires=local-fs.target
+Before=shutdown.target
+Conflicts=shutdown.target
+Wants=network.target
+# Crash-loop protection: at most 10 starts in 10 minutes, then stay failed
+# (visible in `systemctl status` and `wardenctl doctor`) instead of spinning.
+StartLimitIntervalSec=10min
+StartLimitBurst=10
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStartPre=/usr/sbin/wardend --check-config --config /etc/warden/warden.toml
+ExecStart=/usr/sbin/wardend --config /etc/warden/warden.toml
+# `systemctl reload` fails (and says why) when the new configuration does not
+# validate, instead of reporting success while the daemon keeps the old one.
+ExecReload=/usr/sbin/wardend --check-config --config /etc/warden/warden.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=3
+# systemd >= 254: back off 3s → 2min on repeated failures (older versions ignore these keys).
+RestartSteps=6
+RestartMaxDelaySec=2min
+TimeoutStartSec=30
+TimeoutStopSec=15
+
+# --- watchdog: systemd restarts Warden if its fast scheduler stops feeding the ping ---
+WatchdogSec=30s
+
+# --- survive memory pressure: never swapped out, OOM killer avoids us ---
+LimitMEMLOCK=infinity
+# Enough descriptors for inotify/fanotify marks, sockets and the children's pipes.
+LimitNOFILE=16384
+OOMScoreAdjust=-900
+OOMPolicy=continue
+MemorySwapMax=0
+
+# --- capabilities: broad visibility + targeted actions, not unconstrained root ---
+# CAP_KILL              signal any process              CAP_SYS_PTRACE    read /proc/<pid> of other users
+# CAP_SYS_ADMIN         fanotify (real-time web FIM)    CAP_NET_ADMIN     proc connector + nftables + sysctl net.*
+# CAP_SYS_RESOURCE      PSI triggers, rlimits           CAP_SYS_NICE      renice/ioprio (throttle action, scanners)
+# CAP_SYSLOG            read /dev/kmsg (dmesg_restrict=1 on Ubuntu)
+# CAP_DAC_*, CAP_FOWNER, CAP_CHOWN   hash any file, quarantine/restore with original ownership
+# CAP_LINUX_IMMUTABLE   quarantine webshells that attackers made immutable (chattr +i)
+# CAP_SETUID CAP_SETGID run hooks and notification/health commands as an unprivileged
+#                       `user` (they lose every capability on that switch)
+# CAP_IPC_LOCK          mlockall                        CAP_AUDIT_READ    read the audit log
+# CAP_SYS_TIME is deliberately absent: adjtimex() is allowed below for *reading* clock sync
+# state only — without CAP_SYS_TIME the kernel refuses any attempt to change the clock.
+AmbientCapabilities=CAP_KILL CAP_SYS_PTRACE CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SYS_RESOURCE CAP_SYS_NICE CAP_SYSLOG CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_LINUX_IMMUTABLE CAP_IPC_LOCK CAP_AUDIT_READ CAP_SETUID CAP_SETGID
+CapabilityBoundingSet=CAP_KILL CAP_SYS_PTRACE CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SYS_RESOURCE CAP_SYS_NICE CAP_SYSLOG CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_LINUX_IMMUTABLE CAP_IPC_LOCK CAP_AUDIT_READ CAP_SETUID CAP_SETGID
+
+# --- hardening (Warden must still see and act on the whole host) ---
+# Not enabled on purpose:
+#   ProtectHome            — web roots often live in /home/*/public_html (FIM + quarantine need write access)
+#   MemoryDenyWriteExecute — inherited by `exec` actions and notification hooks (Node/Java/Python-ctypes hooks would break)
+#   ProtectKernelTunables  — the guarded `sysctl` action needs /proc/sys
+NoNewPrivileges=yes
+ProtectProc=default
+ProcSubset=all
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# Kernel modules cannot be loaded and /usr/lib/modules is hidden (also from hooks);
+# /proc/modules, which the kernel detector reads, stays visible.
+ProtectKernelModules=yes
+# A private UTS namespace: neither the daemon nor its children can change the
+# host name. Warden reads it at startup — set daemon.hostname, or restart after
+# renaming the host, to keep notifications labelled correctly.
+ProtectHostname=yes
+# Sockets the daemon and its helpers open: the control socket, D-Bus and the
+# journal (AF_UNIX), webhooks, Telegram and HTTP/TCP health checks (AF_INET/6),
+# the proc connector and nftables (AF_NETLINK). Anything else fails with EAFNOSUPPORT.
+# scripts/check-seccomp.sh verifies this list against a trace, like the syscalls.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+UMask=0027
+SystemCallArchitectures=native
+
+# Seccomp allow-list. Verified with scripts/check-seccomp.sh (strace of the daemon and its
+# children vs. `systemd-analyze syscall-filter`). Beyond @system-service Warden needs:
+#   fanotify_init fanotify_mark   real-time FIM (writer PID of changed files)
+#   adjtimex clock_adjtime        read-only clock-sync check (modes=0; see CAP_SYS_TIME note above)
+#   cachestat                     scans evict only the page cache they brought in (Linux 6.5+;
+#                                 optional: without it nothing is evicted)
+#   open_by_handle_at             real-time SUID detection resolves fanotify file handles
+#                                 (optional: without it SUID files are found by periodic walks)
+# @mount is not needed (statfs/fstatfs are in @file-system) and is not allowed: with
+# CAP_SYS_ADMIN it would let a compromised daemon or hook mount, pivot_root or move_mount.
+SystemCallFilter=@system-service fanotify_init fanotify_mark adjtimex clock_adjtime cachestat open_by_handle_at
+SystemCallFilter=~@reboot @swap @module @raw-io @obsolete @cpu-emulation
+# A syscall outside the list fails with EPERM instead of killing the guardian with SIGSYS:
+# a missing kernel feature degrades one sensor (reported by `wardenctl status`), never the daemon.
+SystemCallErrorNumber=EPERM
+
+StateDirectory=warden
+StateDirectoryMode=0700
+RuntimeDirectory=warden
+RuntimeDirectoryMode=0755
+LogsDirectory=warden
+ConfigurationDirectory=warden
+
+[Install]
+WantedBy=multi-user.target

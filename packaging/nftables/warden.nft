@@ -1,0 +1,37 @@
+#!/usr/sbin/nft -f
+#
+# Warden manages its own nftables table (inet warden) at runtime: it creates
+# the table on the first block and adds/removes addresses with kernel timeouts,
+# so nothing has to be cleaned up if the daemon stops and other firewall tools
+# (ufw, firewalld, docker) are left untouched.
+#
+# This file is only for operators who want the table to exist independently of
+# the daemon (e.g. to pre-seed a permanent blocklist). Loading it is optional.
+#
+#   nft -f /usr/share/warden/warden.nft
+#
+# The names here MUST match [actions.firewall] in warden.toml.
+
+table inet warden {
+    set blocklist4 {
+        type ipv4_addr
+        flags timeout
+        size 262144
+        # Pre-seed permanent blocks here if desired:
+        # elements = { 203.0.113.0/24 }
+    }
+
+    set blocklist6 {
+        type ipv6_addr
+        flags timeout
+        size 262144
+    }
+
+    chain input {
+        # priority -10: runs before the default filter hook so blocked traffic
+        # is dropped before any ACCEPT rule in the main ruleset can match.
+        type filter hook input priority filter - 10; policy accept;
+        ip  saddr @blocklist4 counter drop comment "warden blocklist"
+        ip6 saddr @blocklist6 counter drop comment "warden blocklist"
+    }
+}

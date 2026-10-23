@@ -1,0 +1,59 @@
+#!/bin/sh
+# Debian postinst for the warden package.
+set -e
+
+CONFIG=/etc/warden/warden.toml
+
+case "$1" in
+    configure)
+        # State directories the daemon needs (StateDirectory handles /var/lib
+        # only while running; create them now so a first manual run works too).
+        for d in /var/lib/warden /var/lib/warden/fim /var/lib/warden/quarantine /var/lib/warden/snapshots; do
+            [ -d "$d" ] || mkdir -p "$d"
+            chmod 0700 "$d"
+        done
+        mkdir -p /var/log/warden /etc/warden/conf.d /etc/warden/signatures.d
+        # An unprivileged account for hooks and notification commands
+        # (`daemon.command_user = "_warden"`; unused unless configured).
+        # Kept on purge, like every system user (it may own files).
+        if ! getent passwd _warden >/dev/null && command -v useradd >/dev/null; then
+            useradd --system --user-group --no-create-home --home-dir /nonexistent \
+                --shell /usr/sbin/nologin _warden || true
+        fi
+        chmod 0640 "$CONFIG" 2>/dev/null || true
+
+        if [ -z "$2" ]; then
+            # first installation: the service is not enabled or started
+            if ! wardend --check-config --config "$CONFIG" >/dev/null 2>&1; then
+                echo "warden: WARNING — the configuration does not validate; fix it before enabling the service:" >&2
+                echo "warden:   wardend --check-config" >&2
+            fi
+            echo "warden: installed in observe-only mode (dry_run = true): it detects and reports, it changes nothing."
+            echo "warden: review $CONFIG, then: systemctl enable --now wardend"
+            echo "warden: check host support with: wardenctl doctor ; when you trust what you see: wardenctl dry-run off"
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+# Upgrade: restart the running daemon on the new binary — but only if the
+# configuration validates with it. The unit's ExecStartPre runs the same
+# check, so restarting on an invalid configuration would stop the daemon and
+# leave the host unprotected; instead the old daemon keeps running (its
+# binary stays mapped) and the operator is told what to fix.
+if [ "$1" = "configure" ] && [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null 2>&1 || true
+    if [ -n "$2" ] && systemctl is-active --quiet wardend.service; then
+        if wardend --check-config --config "$CONFIG" >/dev/null 2>&1; then
+            deb-systemd-invoke try-restart wardend.service >/dev/null || true
+        else
+            echo "warden: WARNING — the configuration does not validate with warden $(wardend --version 2>/dev/null | awk '{print $2}'):" >&2
+            wardend --check-config --config "$CONFIG" 2>&1 | sed 's/^/warden:   /' >&2 || true
+            echo "warden: the running daemon (version $2) was NOT restarted and keeps protecting the host." >&2
+            echo "warden: fix the configuration, then: systemctl restart wardend" >&2
+        fi
+    fi
+fi
+
+exit 0

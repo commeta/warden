@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+        command -v nft >/dev/null 2>&1 && nft delete table inet warden 2>/dev/null || true
+        ;;
+    purge)
+        command -v nft >/dev/null 2>&1 && nft delete table inet warden 2>/dev/null || true
+        rm -rf /var/lib/warden /var/log/warden /run/warden
+        # The package ships nothing in conf.d/ and signatures.d/: whatever is
+        # there was written by the operator, so purge removes the directories
+        # only when they are empty (like dpkg does for its own directories).
+        for d in /etc/warden/conf.d /etc/warden/signatures.d; do
+            if [ -d "$d" ] && ! rmdir "$d" 2>/dev/null; then
+                echo "warden: kept $d (it holds your files)" >&2
+            fi
+        done
+        rmdir /etc/warden 2>/dev/null || true
+        ;;
+esac
+
+#DEBHELPER#
+exit 0
