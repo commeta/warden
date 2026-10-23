@@ -1,0 +1,87 @@
+# Профиль: сервер баз данных (MySQL/MariaDB, PostgreSQL, Redis, MongoDB, ClickHouse)
+# Установка: sudo ./scripts/install.sh --profile database
+# Можно комбинировать с 50-webserver.toml на одном хосте.
+
+# --- Память: база данных — последний кандидат на «убийство» -----------------
+[memory]
+# Для СУБД лучше предупредить и снять снимок, чем убить процесс с открытыми
+# транзакциями. Жертвы на этом хосте — только «прочие» процессы (см. culprit).
+on_critical = ["snapshot", "kill"]
+
+[memory.culprit]
+prefer = ["php*", "node", "python*", "java", "ruby", "backup*", "mysqldump", "pg_dump", "rsync", "tar", "gzip", "zstd"]
+avoid = ["mysqld", "mariadbd", "postgres", "postmaster", "redis-server", "valkey-server", "mongod", "clickhouse-serv*"]
+avoid_factor = 0.05
+# Совет: дополнительно задайте СУБД OOMScoreAdjust=-800 в её юните
+# (systemctl edit mysql) — и ядро, и Warden будут обходить её стороной.
+
+# --- Здоровье: процесс жив ≠ база отвечает ---------------------------------
+# Проверки идут в отдельном потоке; после `failures` подряд — снимок и рестарт
+# юнита, затем `grace` на запуск. Раскомментируйте нужные.
+
+# [[health.check]]
+# name = "mysql"
+# type = "command"
+# program = "mysqladmin"
+# args = ["--defaults-extra-file=/etc/mysql/debian.cnf", "ping"]   # MariaDB/MySQL на Debian/Ubuntu
+# expect_output = "alive"
+# unit = "mariadb.service"            # или mysql.service
+# interval = "30s"
+# timeout = "10s"
+# failures = 3
+# grace = "3m"                        # InnoDB recovery после рестарта может быть долгим
+
+# [[health.check]]
+# name = "postgres"
+# type = "command"
+# program = "pg_isready"
+# args = ["-h", "127.0.0.1", "-p", "5432", "-t", "5"]
+# unit = "postgresql@16-main.service"
+# failures = 3
+# grace = "3m"
+
+# [[health.check]]
+# name = "redis"
+# type = "command"
+# program = "redis-cli"
+# args = ["-h", "127.0.0.1", "ping"]
+# expect_output = "PONG"
+# unit = "redis-server.service"
+
+# [[health.check]]
+# name = "mongodb-port"
+# type = "tcp"
+# address = "127.0.0.1:27017"
+# unit = "mongod.service"
+# actions = ["snapshot"]              # только сигнал, без рестарта
+
+# --- Безопасность: SQL-инъекция → выполнение команд ------------------------
+# Шелл, запущенный сервером БД, — классика (MySQL UDF, PostgreSQL COPY ... TO
+# PROGRAM, модули Redis). С признаками однострочника (curl|sh, /dev/tcp…)
+# процесс-потомок убивается всегда; здесь — реакция на любые случаи:
+[process.response]
+db_spawn = ["snapshot"]
+
+# PostgreSQL легально вызывает shell для archive_command / restore_command —
+# разрешите свои команды, иначе каждый архивный WAL-файл даст событие:
+# [[process.allowed_children]]
+# parent = "postgres"
+# child = "/usr/bin/pgbackrest"
+# [[process.allowed_children]]
+# parent = "postgres"
+# child = "/usr/local/bin/wal-archive.sh"
+
+# --- Ресурсы: тяжёлые отчёты и дампы не должны «положить» базу -------------
+[[process.limit]]
+name = "долгий дамп/бэкап"
+comm = ["mysqldump", "mariadb-dump", "pg_dump", "pg_dumpall", "mongodump"]
+cpu_percent = 80.0
+cpu_duration = "10m"
+actions = ["throttle"]                # nice 19 + idle I/O: бэкап доделается, но не мешает
+
+[disk]
+# Каталоги данных СУБД (/var/lib/mysql, /var/lib/postgresql) Warden не чистит
+# НИКОГДА — защита путей жёстко зашита. Чистятся только журналы и /tmp.
+warning_percent = 80.0
+critical_percent = 90.0
+cleanup_target_percent = 80.0

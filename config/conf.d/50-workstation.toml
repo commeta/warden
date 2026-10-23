@@ -1,0 +1,62 @@
+# Профиль: рабочая станция / ноутбук разработчика
+# Главная цель — не допустить «зависания на 10 минут» при нехватке памяти и
+# не мешать работе ложными срабатываниями.
+
+[memory]
+# На десктопе реагируем раньше: отзывчивость интерфейса важнее.
+psi_full_avg10_warning = 5.0
+psi_full_avg10_critical = 20.0
+sustain = "10s"
+on_critical = ["kill"]
+
+[memory.swap_storm]
+sustain = "30s"
+
+[memory.culprit]
+prefer = ["chrome*", "chromium*", "firefox*", "electron", "code", "java", "node", "python*", "slack", "Telegram"]
+avoid = ["Xorg", "Xwayland", "gnome-shell", "kwin*", "plasmashell", "pipewire*", "wireplumber", "pulseaudio"]
+
+[protection]
+comm = ["systemd", "systemd-*", "(sd-pam)", "init", "sshd", "sshd-session", "wardend", "dbus-daemon", "dbus-broker*",
+        "Xorg", "Xwayland", "gnome-shell", "gdm*", "sddm*", "lightdm", "kwin*", "plasmashell", "pipewire*",
+        "wireplumber", "pulseaudio", "NetworkManager", "polkitd", "login", "agetty"]
+
+[cpu]
+# Сборки и видео — норма; длительная загрузка не тревожит.
+hog_duration = "2h"
+load_per_cpu_warning = 4.0
+load_per_cpu_critical = 8.0
+
+[disk]
+# На ноутбуке не удаляем пользовательские файлы: только журнал, кэш пакетов и логи.
+cleanup = [
+    { do = "journal_vacuum", max_size = "256MiB" },
+    "apt_clean",
+    { do = "delete_old", paths = ["/var/log/**/*.gz", "/var/log/**/*.[0-9]", "/var/crash/*"], older_than = "7d" },
+    { do = "truncate_deleted", min_size = "100MiB" },
+]
+
+[fim]
+enabled = false
+
+[systemd]
+watch_failed = false
+
+[process]
+# Пользовательские сессии слишком разнообразны для строгих правил.
+detect_ptrace = false
+
+[process.response]
+privilege_escalation = ["snapshot"]
+fileless = []
+unknown_suid = []
+
+[[policy]]
+name = "AppImage и go run запускаются из /tmp — это нормально на рабочей станции"
+kind = "security.exec_from_writable"
+details = { exe = '^/tmp/(?:\.mount_[^/]+|go-build\d+)/' }
+effect = "suppress"
+
+[notify]
+# Уведомления на рабочей станции — только о действительно важном.
+min_severity = "critical"

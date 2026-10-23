@@ -1,0 +1,686 @@
+# =============================================================================
+#  Warden — эталонная конфигурация  (/etc/warden/warden.toml)
+# =============================================================================
+#
+#  * Пустой файл — валидная конфигурация: у каждого параметра есть безопасное
+#    значение по умолчанию. Здесь перечислены все параметры с их умолчаниями.
+#  * Дополнения кладите в /etc/warden/conf.d/*.toml (читаются по алфавиту).
+#    Таблицы сливаются рекурсивно, массивы таблиц ([[fim.site]], [[policy]],
+#    [[notify.webhook]]) — ДОПИСЫВАЮТСЯ, остальные значения — заменяются.
+#  * Опечатка в имени параметра = ошибка запуска (а не тихо проигнорированная
+#    настройка). Проверка:  wardend --check-config   или   wardenctl check-config
+#  * Применение без перезапуска:  systemctl reload wardend  (SIGHUP)
+#
+#  Форматы:  длительности — "500ms", "30s", "5m", "6h", "7d";
+#            размеры — "512MiB", "2G", "4096" (K/M/G = степени 1024).
+#
+#  Действия (actions) задаются строкой или таблицей:
+#    "snapshot"                      — диагностический снимок системы
+#    "kill"                          — SIGTERM → пауза → SIGKILL (через pidfd)
+#    { do = "kill", tree = true, grace = "2s" }  — всё дерево: сначала SIGSTOP всем (новые потомки
+#                                    тоже), затем SIGKILL всем; grace — общий дедлайн. Если дерево —
+#                                    это весь cgroup юнита, используется cgroup.kill
+#    "stop"                          — SIGSTOP (заморозить процесс для расследования)
+#    "freeze_cgroup" / "kill_cgroup" — заморозить/убить весь cgroup (сервис)
+#    { do = "restart_unit", unit = "php8.3-fpm.service" }
+#    "quarantine"                    — переместить файл в карантин
+#    { do = "block_ip", ttl = "1h" } — заблокировать IP в nftables
+#    { do = "journal_vacuum", max_size = "512MiB" }
+#    { do = "delete_old", paths = ["/var/log/**/*.gz"], older_than = "7d" }
+#    { do = "truncate_large", paths = ["/var/log/*.log"], larger_than = "2GiB" }
+#    { do = "truncate_deleted", min_size = "100MiB" }
+#    "apt_clean"
+#    { do = "exec", program = "/usr/local/bin/hook.sh", args = ["x"], timeout = "30s", user = "_warden" }
+#                                    — по таймауту убивается вся группа процессов хука
+#    "throttle"                      — nice 19 + idle I/O для процесса (обратимо, ничего не теряется)
+#    { do = "limit_unit", cpu_quota = "50%", memory_high = "1GiB" }   — лимиты юниту (до перезагрузки)
+#    { do = "sysctl", key = "net.netfilter.nf_conntrack_max", value = "524288" }
+#                                    — только ёмкостные лимиты и в границах по объёму RAM
+# =============================================================================
+
+[daemon]
+tick = "1s"                       # разрешение планировщика
+dry_run = true                    # true = только обнаруживать и сообщать, ничего не делать (по умолчанию).
+                                  # Проверьте `wardenctl events`, затем: false (или `wardenctl dry-run off` — до перезагрузки конфигурации)
+state_dir = "/var/lib/warden"     # базы FIM, целостности, обученные цепочки процессов
+runtime_dir = "/run/warden"
+control_socket = "/run/warden/control.sock"
+log_level = "info"                # trace | debug | info | warn | error
+log_format = "auto"               # auto | text | json | journal
+mlock = true                      # mlockall: демон не уходит в swap во время «свопинга»
+oom_score_adj = -900              # OOM-killer выберет демона последним
+malloc_arenas = 2                 # арены glibc malloc (0 = по умолчанию glibc: 8 на ядро); меньше арен — меньше RSS
+# hostname = "web-01"             # имя в уведомлениях (по умолчанию — имя хоста)
+# command_user = "_warden"        # от кого запускать ваши программы: действия exec, [[notify.command]],
+                                  # проверки здоровья type = "command" (свой user = "…" у каждой важнее;
+                                  # user = "root" — оставить привилегии). Не задан — root со всеми
+                                  # capabilities демона, как до 0.14.1. При смене пользователя они теряются.
+                                  # Пакет и install.sh создают системного пользователя _warden.
+
+# Фоновые обходы (отчёт du при заполненном диске, поиск SUID/SGID, плановые
+# сканы FIM) уступают нагрузке: при занятом диске работают короткими порциями
+# с паузами и не стартуют, пока диск не освободится. Запуски оператором
+# (`wardenctl du`, `wardenctl fim scan`) и очистка диска не замедляются.
+[daemon.pacing]
+enabled = true
+io_pressure = 10.0                # % времени, когда кто-то ждёт I/O (PSI io some), выше — замедляться
+io_class = "adaptive"             # adaptive: idle при нагрузке, best-effort 7 на тихом диске; idle: всегда idle
+max_defer = "1h"                  # дольше плановый обход не откладывается — затем идёт (медленно)
+
+[metrics]
+enabled = true
+listen = "127.0.0.1:9184"         # Prometheus: /metrics, проверка: /health
+
+[events]
+path = "/var/log/warden/events.jsonl"   # журнал всех событий и действий (JSON lines)
+max_size = "50MiB"
+keep = 5
+min_severity = "info"
+ring_size = 2000                  # событий в памяти для `wardenctl events`
+dedup_window = "1m"               # одинаковые события без действий не повторяются чаще
+
+# -----------------------------------------------------------------------------
+#  Уведомления
+# -----------------------------------------------------------------------------
+[notify]
+min_severity = "warning"
+dedup_window = "15m"              # повтор того же события (если не стало хуже)
+max_per_hour = 60                 # emergency отправляются всегда
+include_resolved = true           # сообщать о восстановлении
+details = "safe"                  # что из деталей события уходит наружу (вебхуки, Telegram, команды):
+                                  # safe — всё, но пароли/токены/Authorization/-pПАРОЛЬ заменены на ***;
+                                  # none — только тип, важность, заголовок, объект и действия; all — как есть.
+                                  # Журнал событий всегда хранит оригинал.
+
+# [[notify.webhook]]
+# name = "mattermost"
+# url = "https://chat.example.com/hooks/xxxxxxxx"
+# format = "slack"                # slack = {"text": ...} (Slack/Mattermost/Rocket.Chat); json = всё событие
+# min_severity = "warning"
+# headers = { Authorization = "Bearer ..." }
+# timeout = "10s"
+
+# [notify.telegram]
+# bot_token = "123456:ABC..."
+# chat_id = "-1001234567890"
+# min_severity = "critical"
+
+# [[notify.command]]
+# program = "/usr/bin/mail"
+# args = ["-s", "warden alert", "ops@example.com"]   # текст уведомления подаётся на stdin
+# min_severity = "critical"
+# user = "_warden"                # по умолчанию daemon.command_user
+
+# -----------------------------------------------------------------------------
+#  Безопасность действий
+# -----------------------------------------------------------------------------
+[protection]
+# Процессы, которых Warden никогда не тронет (PID 1, потоки ядра и сам Warden
+# защищены всегда). Сопоставление по glob.
+comm = ["systemd", "systemd-*", "(sd-pam)", "init", "sshd", "sshd-session", "sshd-auth", "wardend",
+        "dbus-daemon", "dbus-broker*", "agetty", "login", "auditd", "rsyslogd", "chronyd", "multipathd",
+        "kubelet", "containerd", "dockerd"]
+exe = ["/usr/lib/systemd/*", "/lib/systemd/*", "/usr/sbin/sshd"]
+# Юниты: ни один процесс внутри них не будет остановлен (сессия SSH администратора!).
+units = ["init.scope", "ssh.service", "sshd.service", "wardend.service", "dbus.service",
+         "systemd-*.service", "getty@*.service", "serial-getty@*.service"]
+uids = []
+
+[actions]
+kill_grace = "5s"                 # SIGTERM → ожидание → SIGKILL
+max_kills_per_hour = 10           # «предохранитель»: не более N убийств в час
+max_actions_per_hour = 120        # и не более N разрушающих действий вообще
+cooldown = "1m"                   # одно и то же действие над тем же объектом — не чаще
+quarantine_dir = "/var/lib/warden/quarantine"
+snapshot_dir = "/var/lib/warden/snapshots"
+snapshot_keep = 30
+snapshot_min_interval = "2m"
+exec_timeout = "30s"
+
+[actions.firewall]
+enabled = true
+table = "warden"                  # собственная таблица nftables: inet warden
+set_v4 = "blocklist4"
+set_v6 = "blocklist6"
+default_ttl = "1h"                # блокировки истекают в ядре сами
+allowlist = ["127.0.0.0/8", "::1/128"]   # ДОБАВЬТЕ сюда свои админские сети!
+max_blocked = 50000
+
+# -----------------------------------------------------------------------------
+#  Память: PSI, нехватка памяти, долгий свопинг (зависание сервера)
+# -----------------------------------------------------------------------------
+[memory]
+enabled = true
+interval = "2s"
+# Пороги «доступной памяти» подстраиваются под машину: проценты ниже
+# ограничиваются разумными абсолютными значениями (1 ГБ VPS → 256/128 МиБ,
+# 512 ГБ сервер → не более 8/2 ГиБ). В контейнере используется лимит cgroup
+# и PSI самого контейнера, а не всего хоста.
+auto_scale = true
+psi_some_avg10_warning = 30.0     # % времени, когда хотя бы одна задача ждала память
+psi_full_avg10_warning = 10.0     # % времени, когда ВСЕ задачи стояли (сервер «висит»)
+psi_full_avg10_critical = 30.0
+available_warning_percent = 8.0   # MemAvailable / MemTotal
+available_critical_percent = 3.0
+swap_used_warning_percent = 85.0
+sustain = "20s"                   # критическое состояние должно длиться столько, прежде чем действовать
+clear_after = "1m"                # столько без проблем — «восстановлено»
+repeat = "30s"                    # если всё ещё критично — повторить (следующий виновник)
+# Не больше стольких результативных kill за эпизод давления (0 — без предела).
+# Kill, после которого MemAvailable не выросла хотя бы на половину того, что
+# держала жертва (анонимная память + swap), останавливает kill до конца эпизода
+# (событие memory.kill_ineffective): память держит tmpfs/shm/ядро, а не процессы.
+max_kills_per_episode = 3
+report_oom_kills = true
+on_warning = []
+on_critical = ["snapshot", "kill"]   # жертва — лучший кандидат из рейтинга (wardenctl top)
+
+# Триггер PSI ядра: мгновенное пробуждение, когда суммарный простой превысил
+# stall за window (аналог: echo "some 150000 1000000" > /proc/pressure/memory).
+[memory.trigger]
+enabled = true
+kind = "some"
+stall = "150ms"
+window = "1s"                     # без CAP_SYS_RESOURCE ядро требует кратность 2s — Warden подстроится
+
+# «Своп-шторм»: система непрерывно гоняет страницы между RAM и swap,
+# ssh не отвечает минутами. Время обнаружения регулируется параметром sustain.
+[memory.swap_storm]
+enabled = true
+min_swap_pages_per_sec = 2000.0   # pswpin + pswpout
+min_majfault_per_sec = 1000.0     # мажорные page faults (в т.ч. thrashing page cache)
+psi_full_avg10 = 10.0             # и при этом PSI full ≥ этого значения
+sustain = "60s"                   # сколько должен длиться шторм до вмешательства
+actions = ["snapshot", "kill"]
+
+# Выбор виновника: RSS + swap + доля oom_score_adj (как у ядра) × активность свопинга.
+[memory.culprit]
+min_rss = "32MiB"
+prefer = ["php-fpm*", "php", "node", "java", "python*", "ruby", "chrome*", "firefox*", "electron"]
+prefer_factor = 1.5
+avoid = ["postgres", "mysqld", "mariadbd", "redis-server", "Xorg", "gnome-shell", "kwin*"]
+avoid_factor = 0.2
+use_oom_score_adj = true          # oom_score_adj=-1000 → процесс никогда не будет жертвой
+
+# -----------------------------------------------------------------------------
+#  CPU, ввод-вывод, зависания
+# -----------------------------------------------------------------------------
+[cpu]
+enabled = true
+interval = "5s"
+psi_some_avg60_warning = 60.0
+psi_some_avg60_critical = 90.0
+load_per_cpu_warning = 2.0        # load5 / число CPU
+load_per_cpu_critical = 4.0
+iowait_warning_percent = 40.0
+blocked_tasks_warning = 16        # задачи в состоянии D (зависшее хранилище/NFS)
+fork_rate_warning = 1500.0        # fork/сек — fork-бомба
+hog_percent = 95.0                # процесс ест ≥95% ядра...
+hog_duration = "30m"              # ...дольше 30 минут
+hog_ignore = ["ffmpeg", "x264", "x265", "gcc", "cc1*", "rustc", "cargo", "clang*", "ld*", "make", "ninja",
+              "java", "node", "python*", "postgres", "mysqld", "mariadbd", "clickhouse*"]
+sustain = "2m"
+clear_after = "2m"
+on_critical = ["snapshot"]
+
+[io]
+enabled = true
+interval = "5s"
+psi_full_avg10_warning = 25.0
+psi_full_avg10_critical = 60.0
+sustain = "1m"
+clear_after = "2m"
+on_critical = ["snapshot"]        # снимок покажет D-состояния и стек ядра
+
+# Обнаружение «заморозки» всего хоста: Warden закреплён в RAM и измеряет,
+# насколько поздно просыпается его собственный планировщик.
+[stall]
+enabled = true
+threshold = "5s"
+critical = "30s"
+actions = ["snapshot"]
+
+# -----------------------------------------------------------------------------
+#  Диски: место, inodes, read-only, прогноз заполнения, автоочистка
+# -----------------------------------------------------------------------------
+[disk]
+enabled = true
+interval = "30s"
+warning_percent = 85.0
+critical_percent = 95.0
+inode_warning_percent = 85.0
+inode_critical_percent = 95.0
+fstypes = ["ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "vfat", "reiserfs", "jfs", "bcachefs"]
+exclude = ["/snap/*", "/boot/efi", "/var/lib/docker/*/merged"]
+predict = true                    # линейная регрессия скорости роста
+horizon = "6h"                    # предупредить, если диск заполнится раньше
+window = "30m"
+detect_readonly = true            # ФС перемонтирована в ro из-за ошибок
+deleted_open_min = "50MiB"        # показывать удалённые, но открытые файлы (df ≠ du)
+cleanup_at = "critical"           # когда запускать плейбук: warning | critical
+cleanup_target_percent = 85.0     # остановиться, как только станет ниже
+# Плейбук очистки: шаги выполняются по порядку, пока не достигнута цель.
+# Затрагиваются только файлы на ТОМ ЖЕ разделе; системные каталоги
+# (/etc, /usr, /var/lib, ...) защищены жёстко.
+cleanup = [
+    { do = "journal_vacuum", max_size = "512MiB" },
+    "apt_clean",
+    { do = "delete_old", paths = ["/var/log/**/*.gz", "/var/log/**/*.[0-9]", "/var/log/**/*.old", "/var/crash/*"], older_than = "3d", max_files = 5000 },
+    # /tmp — по правилам systemd-tmpfiles: возраст по самой свежей из atime/mtime/ctime
+    # (читаемый файл не стареет, `touch -d` не состарит файл), PrivateTmp служб,
+    # блокировки и сокеты X-сервера, tmux не трогаются.
+    { do = "delete_old", paths = ["/tmp/**", "/var/tmp/**"], older_than = "10d", max_files = 20000, age_from = "newest", exclude = [
+        "/tmp/systemd-private-*", "/var/tmp/systemd-private-*", "/tmp/snap-private-tmp",
+        "/tmp/.X*-lock", "/tmp/.X11-unix", "/tmp/.ICE-unix", "/tmp/.XIM-unix", "/tmp/.font-unix", "/tmp/.Test-unix",
+        "/tmp/tmux-*",
+    ] },
+    { do = "truncate_deleted", min_size = "100MiB" },   # логи, удалённые logrotate, но удерживаемые процессом
+    { do = "truncate_large", paths = ["/var/log/*.log", "/var/log/**/*.log"], larger_than = "2GiB" },
+]
+repeat = "15m"
+# «Кто занял диск»: если очистка не помогла (или выполнять нечего), в фоне
+# с idle-приоритетом проходит ограниченный `du -x` по разделу и приходит
+# событие disk.usage_report с самыми большими каталогами и файлами.
+usage_report = true
+usage_report_every = "24h"        # не чаще раза в сутки на раздел
+usage_report_max_entries = 2000000
+usage_report_max_time = "2m"
+
+# -----------------------------------------------------------------------------
+#  Лимиты ядра и сеть
+# -----------------------------------------------------------------------------
+[limits]
+enabled = true
+interval = "15s"
+file_warning_percent = 80.0       # /proc/sys/fs/file-nr
+file_critical_percent = 95.0
+pid_warning_percent = 75.0        # задачи vs pid_max / threads-max
+pid_critical_percent = 90.0
+conntrack_warning_percent = 80.0  # заполнение таблицы conntrack (при 100% — потеря соединений)
+conntrack_critical_percent = 95.0
+process_fd_warning_percent = 90.0 # процесс близок к своему RLIMIT_NOFILE
+zombies_warning = 50
+
+[network]
+enabled = true
+interval = "10s"
+listen_overflows_per_sec = 5.0    # переполнение очереди accept (приложение не успевает)
+syncookies_per_sec = 50.0         # SYN-flood
+iface_errors_per_sec = 10.0
+tcp_retrans_percent = 10.0
+ignore_interfaces = ["lo", "veth*", "docker*", "br-*", "virbr*", "tun*", "tap*"]
+sustain = "30s"
+
+# -----------------------------------------------------------------------------
+#  systemd, железо, ядро
+# -----------------------------------------------------------------------------
+[systemd]
+enabled = true
+interval = "30s"                  # опрос `systemctl`, если D-Bus недоступен
+watch_failed = true
+auto_restart = []                 # напр. ["nginx.service", "php8.3-fpm.service"]
+max_restarts_per_hour = 3         # бюджет рестартов юнита в час — единственный; тратится только
+                                  # на рестарты, которые действительно выполнялись (не в dry-run)
+ignore = []
+dbus = true                       # изменения состояния юнитов по D-Bus — мгновенно и без запуска systemctl
+dbus_reconcile = "10m"            # полная сверка списка упавших юнитов на случай пропущенного сигнала
+
+[hardware]
+enabled = true
+interval = "1m"
+edac = true                       # ошибки ECC-памяти
+thermal = true
+thermal_warning_c = 85.0
+thermal_critical_c = 95.0
+clock = true                      # синхронизация часов (NTP)
+clock_max_error = "500ms"         # предел оценки ошибки NTP (esterror); растущий maxerror не учитывается
+
+[kernel]
+enabled = true
+kmsg = true                       # /dev/kmsg: OOM, hung task, ошибки ФС/дисков, отказы AppArmor/SELinux...
+segfault_burst = 20               # падений одной программы за 5 минут
+lsm_denial_burst = 50
+interval = "1m"
+taint = true                      # ядро стало «tainted» (oops, неподписанный модуль, ...)
+modules = true                    # загружен новый модуль ядра
+lsm_state = true                  # AppArmor отключён / SELinux → permissive во время работы
+on_oom_kill = ["snapshot"]
+on_hung_task = ["snapshot"]
+# Свои шаблоны для сообщений ядра:
+# [[kernel.patterns]]
+# kind = "storage.raid_failure"
+# regex = 'md/raid\d+:md\d+: Disk failure'
+# severity = "critical"
+# title = "RAID: отказ диска"
+# actions = ["snapshot"]
+
+# -----------------------------------------------------------------------------
+#  Безопасность процессов (реальное время через netlink proc connector)
+# -----------------------------------------------------------------------------
+[process]
+enabled = true
+proc_connector = true             # exec/uid/ptrace события в реальном времени (без eBPF)
+# Быстрый путь: сочетание (родитель, исполняемый файл, uid), трижды проверенное
+# без замечаний, дальше стоит 1–2 чтения /proc вместо ~10. Скрипты оболочек и
+# интерпретаторов и LD_PRELOAD у root-процессов проверяются всегда.
+exec_fast_path = true
+exec_recheck_every = 16           # каждый N-й такой exec — полная проверка (0 — никогда)
+scan_interval = "15s"             # периодический обход /proc
+web_users = ["www-data", "nginx", "apache", "http", "httpd", "wwwrun", "nobody", "php-fpm"]
+# Имена веб-серверов и app-серверов. Считаются «веб-воркером» только при
+# запуске НЕ от root (мастер-процессы Apache/nginx легально запускают
+# логгеры и проверки конфигурации). Учетные записи из web_users — всегда.
+web_comms = ["php-fpm*", "php-cgi*", "php", "php[0-9]*", "apache2", "httpd", "nginx", "lsphp*", "node", "nodejs",
+             "uwsgi", "gunicorn*", "puma*", "unicorn*", "passenger*", "java", "tomcat*", "dotnet", "fcgiwrap",
+             "frankenphp", "hhvm", "litespeed", "lshttpd", "uvicorn", "hypercorn", "daphne", "deno", "bun"]
+# Что подозрительно запускать из веб-воркера (классика веб-шеллов).
+suspicious_children = ["sh", "bash", "dash", "zsh", "ksh", "csh", "tcsh", "fish", "busybox", "nc", "ncat", "netcat",
+                       "socat", "telnet", "curl", "wget", "python*", "perl", "ruby", "lua*", "base64", "xxd", "nmap",
+                       "masscan", "whoami", "id", "uname", "hostname", "ifconfig", "ip", "ss", "netstat", "crontab",
+                       "chmod", "chattr", "ssh", "scp", "tftp", "ftp", "gcc", "cc", "make", "dd", "mkfifo", "openssl"]
+# Исключения: легитимные пары «родитель → потомок». child сопоставляется с
+# comm, путём к программе, целью `sh -c <tool>` и путём к скрипту интерпретатора
+# (perl /usr/lib/cgi-bin/x.pl) — так разрешаются CGI-скрипты по расположению.
+allowed_children = [
+    { parent = "php*", child = "/usr/sbin/sendmail" },
+    { parent = "php*", child = "/usr/lib/sendmail" },
+    { parent = "php*", child = "/usr/bin/msmtp" },
+    { parent = "php*", child = "/usr/sbin/postdrop" },
+    { parent = "php*", child = "/usr/bin/convert" },
+    { parent = "php*", child = "/usr/bin/magick" },
+    { parent = "php*", child = "/usr/bin/gs" },
+    { parent = "php*", child = "/usr/bin/ffmpeg" },
+    { parent = "php*", child = "/usr/bin/ffprobe" },
+    { parent = "php*", child = "/usr/bin/pdftotext" },
+    { parent = "php*", child = "/usr/bin/wkhtmltopdf" },
+    { parent = "php*", child = "/usr/bin/git" },
+    { parent = "node", child = "/usr/bin/git" },
+    { parent = "sendmail", child = "/usr/sbin/postdrop" },
+    { parent = "nginx", child = "/usr/sbin/nginx" },
+    { parent = "apache2", child = "/usr/sbin/apache2" },
+    { parent = "apache2", child = "/usr/bin/rotatelogs" },
+    { parent = "httpd", child = "/usr/sbin/rotatelogs" },
+    { parent = "apache2", child = "/usr/bin/logger" },
+    { parent = "httpd", child = "/usr/bin/logger" },
+    { parent = "apache2", child = "/usr/sbin/cronolog" },
+]
+writable_exec_paths = ["/tmp/**", "/var/tmp/**", "/dev/shm/**", "/run/shm/**", "/var/www/**", "/srv/www/**",
+                       "/home/*/public_html/**", "/var/lib/php/sessions/**", "/run/user/**"]
+# SUID-программы, которым разрешено давать euid 0 обычному пользователю.
+setuid_allowlist = ["/usr/bin/sudo", "/usr/bin/sudoedit", "/usr/bin/sudo-rs", "/usr/bin/su", "/usr/bin/pkexec",
+                    "/usr/bin/passwd", "/usr/bin/newgrp", "/usr/bin/chsh", "/usr/bin/chfn", "/usr/bin/gpasswd",
+                    "/usr/bin/mount", "/usr/bin/umount", "/usr/bin/fusermount*", "/usr/bin/doas", "/usr/bin/at",
+                    "/usr/bin/crontab", "/usr/sbin/unix_chkpwd", "/usr/sbin/pppd", "/usr/bin/ntfs-3g",
+                    "/usr/lib/dbus-1.0/dbus-daemon-launch-helper", "/usr/lib/policykit-1/polkit-agent-helper-1",
+                    "/usr/lib/polkit-1/polkit-agent-helper-1", "/usr/libexec/polkit-agent-helper-1",
+                    "/usr/lib/openssh/ssh-keysign", "/usr/libexec/openssh/ssh-keysign", "/usr/lib/snapd/snap-confine",
+                    "/usr/lib/xorg/Xorg.wrap", "/usr/lib/eject/dmcrypt-get-device", "/usr/sbin/mount.*",
+                    "/usr/lib/chromium/chrome-sandbox", "/opt/google/chrome/chrome-sandbox",
+                    "/usr/bin/vmware-user-suid-wrapper", "/usr/bin/expiry", "/usr/bin/chage", "/usr/bin/ssh-agent",
+                    "/usr/bin/write*", "/usr/bin/wall"]
+# Легитимные «посредники» повышения привилегий (их root-потомки не считаются эскалацией).
+root_transition_parents = ["sudo", "sudo-rs", "su", "pkexec", "doas", "run0", "polkitd", "polkit-agent-he*", "login",
+                           "sshd", "sshd-session", "gdm-session-wor*", "lightdm", "sddm*", "systemd", "(sd-pam)", "cron",
+                           "crond", "atd", "snapd", "snap-confine", "containerd-shim*", "runc", "crun", "conmon",
+                           "dbus-daemon-lau*", "unix_chkpwd", "newgrp", "mount", "fusermount*"]
+detect_masquerade = true          # пользовательский процесс маскируется под [kworker]
+detect_fileless = true            # запуск из memfd / удалённого файла
+detect_reverse_shell = true       # shell, у которого stdin/stdout — TCP-сокет
+detect_ld_preload = true          # LD_PRELOAD из записываемых каталогов у root/веб-процессов
+detect_ptrace = true
+ptrace_allow = ["gdb", "lldb*", "strace", "ltrace", "perf", "valgrind*", "rr", "dlv", "py-spy", "rbspy", "criu",
+                "apport", "systemd-coredump"]
+miner_names = ["xmrig*", "xmr-stak*", "kdevtmpfsi", "kinsing", "minerd", "cpuminer*", "nanominer", "t-rex", "lolminer",
+               "phoenixminer", "ethminer", "nbminer", "gminer", "srbminer*", "teamredminer", "c3pool*", "moneroocean*",
+               "sysupdate", "networkservice", "kthreaddi", "kworkerds", "dbused", "solrd"]
+miner_ports = [3333, 3334, 3357, 4444, 5555, 5556, 6666, 7777, 8888, 9999, 14433, 14444, 45560, 45700]
+# Серверы БД: shell, запущенный ими, — признак SQL-инъекции с выполнением
+# команд (MySQL UDF, PostgreSQL COPY ... TO PROGRAM, модули Redis).
+db_comms = ["mysqld", "mariadbd", "postgres", "postmaster", "redis-server", "valkey-server", "keydb-server", "mongod",
+            "mongos", "clickhouse-serv*", "memcached", "influxd", "etcd"]
+# Применять действия к находкам по процессам, которые уже работали при старте
+# Warden (без контекста запуска). По умолчанию — только сообщать.
+act_on_existing = false
+
+# Реакция по типам находок. Пустой список = только уведомление + очки эвристики.
+[process.response]
+privilege_escalation = ["stop", "snapshot"]   # SIGSTOP сохраняет память процесса для расследования
+web_spawn = []                    # явные однострочники (curl|sh, /dev/tcp...) убиваются всегда
+exec_from_writable = []
+fileless = ["stop"]
+reverse_shell = ["kill"]
+miner = ["kill"]
+masquerade = []
+ld_preload = []
+ptrace = []
+unknown_suid = ["stop"]
+db_spawn = []                     # однострочники (curl|sh, /dev/tcp...) убиваются всегда
+
+# Ограничения ресурсов для долгих/прожорливых процессов (скриптов).
+# Условия: cpu_percent (одного ядра) в течение cpu_duration, max_runtime
+# (время жизни процесса), max_rss. Без actions — только событие.
+# [[process.limit]]
+# name = "зависший PHP-скрипт"
+# comm = ["php-fpm*", "php-cgi*"]
+# users = ["www-data"]                # необязательно
+# units = ["php*-fpm.service"]        # необязательно
+# cpu_percent = 90.0
+# cpu_duration = "5m"
+# actions = ["snapshot", { do = "kill", grace = "2s" }]   # или "throttle"
+
+# -----------------------------------------------------------------------------
+#  Целостность системы: конфиги, точки закрепления, SUID, новые порты
+# -----------------------------------------------------------------------------
+[integrity]
+enabled = true
+interval = "5m"
+files = ["/etc/passwd", "/etc/shadow", "/etc/group", "/etc/gshadow", "/etc/sudoers", "/etc/sudoers.d/*",
+         "/etc/ssh/sshd_config", "/etc/ssh/sshd_config.d/*", "/root/.ssh/authorized_keys", "/root/.ssh/authorized_keys2",
+         "/home/*/.ssh/authorized_keys", "/etc/crontab", "/etc/cron.d/*", "/etc/cron.hourly/*", "/etc/cron.daily/*",
+         "/var/spool/cron/crontabs/*", "/etc/ld.so.preload", "/etc/ld.so.conf", "/etc/ld.so.conf.d/*", "/etc/pam.d/*",
+         "/etc/security/*.conf", "/etc/systemd/system/*.service", "/etc/systemd/system/*.timer",
+         "/etc/systemd/system/*/*.service", "/etc/systemd/system/*/*.conf", "/lib/systemd/system/*.service",
+         "/usr/lib/systemd/system/*.service", "/etc/rc.local", "/etc/profile", "/etc/profile.d/*", "/etc/bash.bashrc",
+         "/etc/environment", "/root/.bashrc", "/root/.profile", "/etc/hosts", "/etc/nsswitch.conf", "/etc/resolv.conf",
+         "/etc/modprobe.d/*", "/etc/modules-load.d/*", "/etc/udev/rules.d/*", "/etc/apt/sources.list",
+         "/etc/apt/sources.list.d/*", "/usr/bin/sudo", "/usr/sbin/sshd", "/usr/bin/passwd", "/bin/login", "/usr/bin/login",
+         "/usr/lib/mysql/plugin/*"]       # новый .so в плагинах MySQL/MariaDB = UDF-бэкдор
+suid_scan = true                  # новые SUID/SGID-файлы (с проверкой по контрольным суммам dpkg)
+suid_paths = ["/usr", "/bin", "/sbin", "/opt", "/home", "/tmp", "/var", "/srv", "/root", "/dev/shm"]
+# Не обходить: слои образов контейнеров и хранилища snap/flatpak (SUID там легитимны).
+# Точки монтирования с nosuid, сетевые и псевдо-ФС пропускаются автоматически.
+suid_exclude = ["/var/lib/docker", "/var/lib/containerd", "/var/lib/containers", "/var/lib/lxd", "/var/lib/snapd",
+                "/var/lib/flatpak", "/var/lib/lxc/*/rootfs", "/var/lib/machines",
+                "/home/*/.local/share/containers", "/home/*/.local/share/flatpak"]
+suid_interval = "6h"              # полный обход без real-time (или для корней, которые real-time не покрывает)
+suid_realtime = true              # chmod u+s / создание / перенос SUID-файла — сразу (fanotify, Linux 5.9+)
+suid_rescan = "7days"             # страховочный полный обход, пока real-time работает
+suid_delay = "2m"                 # первый обход после старта (при свежем baseline и real-time — не нужен)
+listeners = true                  # новые слушающие порты (bind shell!)
+listener_ignore_ports = []
+on_change = []
+
+# -----------------------------------------------------------------------------
+#  Аутентификация (journald или /var/log/auth.log)
+# -----------------------------------------------------------------------------
+[auth]
+enabled = true
+source = "auto"                   # auto | journal | file
+auth_log = "/var/log/auth.log"
+ssh_max_failures = 8              # неудачных попыток с одного IP...
+ssh_window = "10m"                # ...за это время → блокировка
+ssh_block = true                  # false: только сообщать; эвристика тоже не заблокирует по этому событию
+ssh_block_ttl = "1h"
+allowlist = []                    # сети, которые никогда не блокируются (плюс actions.firewall.allowlist)
+alert_root_login = true
+alert_sudo_failure = true
+alert_account_changes = true      # useradd/usermod (группа sudo!), удаление, смена пароля
+
+# -----------------------------------------------------------------------------
+#  FIM сайтов: контрольные суммы, сигнатуры веб-шеллов, поиск «нулевого пациента»
+# -----------------------------------------------------------------------------
+[fim]
+enabled = true
+schedule = "6h"                   # полная проверка по расписанию (idle-приоритет I/O)
+scan_on_start = true
+realtime = true                   # fanotify: мгновенно + PID процесса-писателя
+low_priority = true
+max_files_per_sec = 2000          # ограничение скорости обхода (0 = без ограничения)
+max_file_size = "16MiB"
+signatures = ["/etc/warden/signatures.d/*.toml"]   # свои правила (+ встроенные)
+alert_score = 40                  # сумма очков сигнатур → предупреждение
+quarantine_score = 80             # → карантин (+ убийство писавшего воркера, + рестарт пула)
+quarantine = true
+burst_files = 25                  # столько изменений...
+burst_window = "2m"               # ...за это время = массовое заражение (emergency)
+# Изменения от этих программ (деплой) принимаются в базу автоматически —
+# если содержимое не помечено сигнатурами.
+trusted_writers = ["git", "rsync", "composer", "npm", "yarn", "pnpm", "dpkg", "apt*", "unattended-upgr*"]
+trusted_users = []                # пусто = любой пользователь, кроме веб-аккаунтов
+correlate_window = "30s"          # окно поиска запроса в access.log вокруг изменения
+block_attackers = true            # блокировать IP, обращающиеся к помеченным файлам
+kill_writer = true                # убивать веб-воркер, записавший вредоносный код
+
+# Пример сайта (добавляйте свои в conf.d/*.toml):
+# [[fim.site]]
+# name = "main"
+# root = "/var/www/html"                       # корень документов (URL /x.php = root/x.php)
+# access_log = "/var/log/nginx/access.log"     # combined/common формат
+# restart_unit = "php8.3-fpm.service"          # перезапустить после карантина (in-memory бэкдоры)
+# include = [...]                              # по умолчанию: php, phtml, js, py, rb, pl, sh, html, .htaccess, .user.ini...
+# exclude = ["**/.git/**", "**/cache/**/*.html"]
+# no_scripts = ["wp-content/uploads/**", "uploads/**", "media/**"]   # скрипты здесь = всегда тревога
+# signature_exclude = ["**/*.min.js"]
+# quarantine = true
+
+# -----------------------------------------------------------------------------
+#  ModSecurity (v2 mod_security2 для Apache, v3 libmodsecurity для nginx/Apache)
+# -----------------------------------------------------------------------------
+# ModSecurity блокирует отдельный запрос и «не помнит» атакующего. Warden
+# читает его журналы, считает заблокированные запросы по IP и блокирует
+# настойчивых атакующих в nftables, повышает их эвристический счёт и
+# связывает IP с подброшенными файлами (FIM: «нулевой пациент»).
+[waf]
+enabled = true                    # работает, только если указан хотя бы один [[waf.log]]
+block_after = 5                   # заблокированных запросов с одного IP...
+window = "10m"                    # ...за это время → блокировка IP
+block = true
+block_ttl = "1h"
+count_detection_only = false      # учитывать срабатывания в режиме DetectionOnly
+min_rule_severity = "critical"    # emergency|alert|critical|error|warning|notice
+ignore_rules = []                 # ID правил CRS с ложными срабатываниями
+
+# [[waf.log]]
+# path = "/var/log/apache2/modsec_audit.log"   # SecAuditLog (нативный или JSON — определится сам)
+# format = "auto"                              # auto | json | native | error_log
+# site = "main"                                # связь с [[fim.site]] для корреляции
+# [[waf.log]]
+# path = "/var/log/nginx/error.log"            # nginx + ModSecurity-nginx
+
+# -----------------------------------------------------------------------------
+#  Проверки здоровья: «процесс жив» ≠ «сервис отвечает» (зависшие сервисы,
+#  микросервисы, базы данных). Выполняются в отдельном потоке.
+# -----------------------------------------------------------------------------
+[health]
+enabled = true
+
+# [[health.check]]
+# name = "api"
+# type = "http"                       # http | tcp | command
+# url = "http://127.0.0.1:8080/health"
+# expect_status = "200-399"           # или "200,204"
+# expect_body = "ok"                  # необязательно
+# tls_verify = true
+# interval = "30s"
+# timeout = "5s"
+# failures = 3                        # подряд, прежде чем считать сервис упавшим
+# unit = "api.service"                # без actions: снимок + restart этого юнита
+# grace = "60s"                       # после действия не судить, пока сервис стартует
+# actions = []                        # свои действия вместо рестарта
+#
+# [[health.check]]
+# name = "postgres"
+# type = "command"
+# program = "pg_isready"
+# args = ["-h", "127.0.0.1", "-t", "5"]
+# user = "postgres"                   # по умолчанию daemon.command_user
+# unit = "postgresql@16-main.service"
+#
+# [[health.check]]
+# name = "backend-port"
+# type = "tcp"
+# address = "127.0.0.1:9000"
+
+# -----------------------------------------------------------------------------
+#  Параметры ядра: советник и ограниченное авто-увеличение лимитов
+# -----------------------------------------------------------------------------
+# Советник сравнивает sysctl с железом и реальной нагрузкой (БД, веб-серверы,
+# Elasticsearch) и объясняет рекомендации: `wardenctl tuning`. Сам он ничего
+# не меняет. auto_grow увеличивает ТОЛЬКО ёмкостные лимиты (conntrack, pid_max,
+# file-max), когда они почти исчерпаны, и только в границах по объёму RAM.
+# swappiness, dirty-кэш, THP и т.п. автоматически не меняются никогда.
+[tuning]
+advise = true
+interval = "6h"
+auto_grow = false
+persist = false                   # true → /etc/sysctl.d/90-warden.conf (переживает перезагрузку)
+ignore = []                       # ключи рекомендаций, которые не показывать
+
+# -----------------------------------------------------------------------------
+#  Эвристика: накопление подозрительности
+# -----------------------------------------------------------------------------
+[heuristics]
+enabled = true
+half_life = "30m"                 # очки «остывают» вдвое каждые 30 минут
+alert_score = 60.0
+contain_score = 120.0
+on_contain = ["stop", "snapshot"]
+ip_block_score = 60.0             # блокировка IP по сумме очков; события с выключенной блокировкой
+                                  # (ssh_block/waf.block/block_attackers = false, allowlist, политика alert_only)
+                                  # добавляют очки, но сами блокировку не запускают
+lineage = true                    # обучение цепочек «родитель → программа» для сервисов
+lineage_learning = "7d"           # после обучения — уведомлять о невиданных цепочках
+
+[heuristics.weights]
+privilege_escalation = 100.0
+reverse_shell = 100.0
+miner = 100.0
+fileless_exec = 80.0
+unknown_suid_exec = 80.0
+ld_preload = 60.0
+masquerade = 50.0
+exec_from_writable = 40.0
+ptrace = 40.0
+web_spawn = 30.0
+miner_port = 40.0
+new_lineage = 15.0
+ssh_bruteforce = 60.0
+bruteforce_success = 100.0
+webshell = 100.0
+webshell_access = 60.0
+malicious_writer = 100.0
+db_spawn = 60.0
+waf_attack = 40.0
+
+# -----------------------------------------------------------------------------
+#  Политики оператора (ложные срабатывания, переопределения)
+# -----------------------------------------------------------------------------
+# effect: suppress | alert_only | set_severity | add_actions | replace_actions
+#
+# [[policy]]
+# name = "бэкап-скрипт запускается из PHP"
+# kind = "security.web_spawn"
+# details = { cmdline = '^sh -c /usr/local/bin/site-backup\.sh' }
+# effect = "suppress"
+#
+# [[policy]]
+# name = "на этом сервере память не трогаем — только сообщаем"
+# kind = "memory.*"
+# effect = "alert_only"
+#
+# [[policy]]
+# name = "любой shell от www-data — убивать сразу"
+# kind = "security.web_spawn"
+# subject = 'user=www-data'
+# effect = "add_actions"
+# actions = [{ do = "kill", tree = true }]

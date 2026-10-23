@@ -1,0 +1,32 @@
+# Пример пользовательских сигнатур для FIM.
+# Скопируйте в /etc/warden/signatures.d/ и дополняйте своими правилами.
+# Сигнатуры суммируются; итог сравнивается с fim.alert_score / fim.quarantine_score.
+#
+# Поля:
+#   id          — уникальный идентификатор
+#   description — что обнаружено (попадает в уведомление)
+#   score       — очки (100 = однозначно вредоносно)
+#   pattern     — регулярное выражение (синтаксис Rust regex, без обратных ссылок);
+#                 удобно писать в '''тройных одинарных кавычках''' — без экранирования
+#   files       — glob по имени файла; пусто = все файлы
+
+[[rule]]
+id = "local-seo-spam-pharma"
+description = "SEO-спам: фарма-ссылки, внедрённые в шаблон"
+score = 50
+pattern = '''(?i)<a[^>]+href=["']https?://[^"']+["'][^>]*>\s*(?:buy\s+)?(?:viagra|cialis|tramadol|xanax)'''
+files = ["*.php", "*.html", "*.htm"]
+
+[[rule]]
+id = "local-hidden-iframe"
+description = "Скрытый iframe (drive-by)"
+score = 40
+pattern = '''(?i)<iframe[^>]+(?:width|height)\s*=\s*["']?0["']?[^>]+(?:visibility\s*:\s*hidden|display\s*:\s*none)'''
+files = ["*.php", "*.html", "*.htm", "*.js"]
+
+[[rule]]
+id = "local-wp-fake-plugin"
+description = "Поддельный плагин WordPress с пустым заголовком и eval"
+score = 60
+pattern = '(?is)Plugin Name:\s*\n.{0,400}\beval\s*\('
+files = ["*.php"]

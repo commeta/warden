@@ -1,0 +1,107 @@
+# Профиль: веб-сервер (nginx/Apache + PHP-FPM/mod_php/CGI/FastCGI, Node.js, Python)
+# Установщик кладёт этот файл в /etc/warden/conf.d/ при --profile webserver.
+# Поправьте пути сайтов и юниты под свой сервер.
+
+[[fim.site]]
+name = "main"
+root = "/var/www/html"
+access_log = "/var/log/nginx/access.log"     # Apache: /var/log/apache2/access.log
+restart_unit = "php8.3-fpm.service"          # mod_php: apache2.service
+
+# Второй сайт, например на Node.js:
+# [[fim.site]]
+# name = "api"
+# root = "/srv/api"
+# include = ["**/*.js", "**/*.mjs", "**/*.cjs", "**/*.ts", "**/*.json", "**/.env"]
+# exclude = ["**/.git/**", "**/node_modules/.cache/**", "**/logs/**"]
+# no_scripts = ["public/uploads/**"]
+# signature_exclude = ["**/node_modules/**", "**/*.min.js", "**/dist/**"]
+# access_log = "/var/log/nginx/api.access.log"
+# restart_unit = "api.service"
+
+# --- ModSecurity (v2 для Apache, v3/libmodsecurity для nginx) ---------------
+# ModSecurity блокирует отдельный запрос; Warden считает заблокированные
+# запросы по IP и после `block_after` за `window` блокирует атакующего в
+# nftables, а также связывает IP с подброшенными файлами (FIM).
+# Формат определяется автоматически: JSON-аудит, нативный аудит или error.log.
+#
+# [[waf.log]]
+# path = "/var/log/apache2/modsec_audit.log"   # Apache + mod_security2 (SecAuditLog)
+# site = "main"
+# [[waf.log]]
+# path = "/var/log/nginx/error.log"            # nginx + ModSecurity-nginx (строки "ModSecurity: Access denied")
+# site = "main"
+# [[waf.log]]
+# path = "/var/log/modsec_audit.json"          # libmodsecurity 3 с SecAuditLogFormat JSON
+# format = "json"
+[waf]
+block_after = 5
+window = "10m"
+block_ttl = "1h"
+# ignore_rules = ["920350"]                    # ложные срабатывания CRS на ваших сайтах
+
+[systemd]
+# Поднимать упавшие ключевые сервисы автоматически (не чаще 3 раз в час).
+auto_restart = ["nginx.service", "apache2.service", "php*-fpm.service", "mysql.service", "mariadb.service", "redis-server.service"]
+
+[process.response]
+# На веб-сервере любой shell из PHP без allowlist — сразу убивать.
+web_spawn = [{ do = "kill", tree = true, grace = "500ms" }]
+
+# CGI-скрипты (mod_cgi, fcgiwrap) — это и есть «веб-сервер запускает perl/python».
+# Разрешите их по расположению скрипта:
+# [[process.allowed_children]]
+# parent = "apache2"
+# child = "/usr/lib/cgi-bin/**"
+# [[process.allowed_children]]
+# parent = "fcgiwrap"
+# child = "/usr/lib/cgi-bin/**"
+
+# --- Зависшие и прожорливые скрипты ----------------------------------------
+# PHP-FPM воркер, который 5 минут жжёт 90% ядра, — это бесконечный цикл или
+# тяжёлая атака на скрипт. Убиваем воркер: FPM сразу запустит новый.
+[[process.limit]]
+name = "зависший PHP-скрипт"
+comm = ["php-fpm*", "php-cgi*", "lsphp*"]
+cpu_percent = 90.0
+cpu_duration = "5m"
+actions = ["snapshot", { do = "kill", grace = "2s" }]
+
+# CGI/CLI-скрипт, запущенный веб-сервером, не должен жить часами.
+[[process.limit]]
+name = "долгоживущий CGI"
+comm = ["php-cgi*", "perl", "python*"]
+users = ["www-data"]
+max_runtime = "30m"
+actions = [{ do = "kill", grace = "5s" }]
+
+# Утечка памяти в воркере: мягко — сначала только сообщаем.
+[[process.limit]]
+name = "раздутый воркер"
+comm = ["php-fpm*", "node", "uwsgi", "gunicorn*"]
+max_rss = "1GiB"
+
+# --- Здоровье сайта: процесс жив ≠ сайт отвечает ---------------------------
+# [[health.check]]
+# name = "site"
+# type = "http"
+# url = "http://127.0.0.1/healthz"           # или любая лёгкая страница
+# expect_status = "200-399"
+# unit = "php8.3-fpm.service"                # 3 провала подряд → снимок + рестарт PHP-FPM
+# failures = 3
+# interval = "30s"
+
+[memory.culprit]
+# Сначала жертвуем воркерами пулов, базы данных — в последнюю очередь.
+prefer = ["php-fpm*", "node", "java", "python*", "ruby", "uwsgi", "gunicorn*"]
+avoid = ["mysqld", "mariadbd", "postgres", "redis-server", "nginx", "apache2"]
+
+[actions.firewall]
+# ОБЯЗАТЕЛЬНО добавьте адреса администраторов и мониторинга.
+allowlist = ["127.0.0.0/8", "::1/128"]
+
+[[policy]]
+name = "WordPress cron через wp-cli — не тревожить"
+kind = "security.web_spawn"
+details = { cmdline = '(?:^|/)wp(?:-cli)?(?:\.phar)? cron event run' }
+effect = "suppress"
