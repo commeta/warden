@@ -61,7 +61,7 @@ jobs:
       - run: cargo build --release --locked -p wardend -p wardenctl
       - name: Seccomp filter covers every syscall the daemon uses
         run: |
-          sudo -E env "PATH=$PATH" bash -lc 'cd "$GITHUB_WORKSPACE" && ./scripts/check-seccomp.sh ./target/release/wardend 20'
+          sudo -E env "PATH=$PATH" bash -lc 'cd "$GITHUB_WORKSPACE" && bash ./scripts/check-seccomp.sh ./target/release/wardend 20'
       - name: Install (dry-run) and start the unit
         run: |
           sudo mkdir -p /var/www/html && echo '<?php echo 1;' | sudo tee /var/www/html/index.php >/dev/null
