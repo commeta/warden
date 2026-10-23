@@ -65,7 +65,7 @@ jobs:
       - name: Install (dry-run) and start the unit
         run: |
           sudo mkdir -p /var/www/html && echo '<?php echo 1;' | sudo tee /var/www/html/index.php >/dev/null
-          sudo -E env "PATH=$PATH" bash -lc 'cd "$GITHUB_WORKSPACE" && ./scripts/install.sh --no-build --profile webserver --enable --start'
+          sudo -E env "PATH=$PATH" bash -lc 'cd "$GITHUB_WORKSPACE" && bash ./scripts/install.sh --no-build --profile webserver --enable --start'
       - name: Service stays up and healthy
         run: |
           sleep 45
@@ -89,8 +89,8 @@ jobs:
           sudo systemctl status wardend --no-pager || true
           sudo journalctl -u wardend -n 200 --no-pager || true
 
-  # Coverage on every push and pull request: the number is in the job
-  # summary (and a comment on pull requests from this repository), the build
+  # Coverage on every push and pull request: the number is in the
+  # job summary (and a comment on pull requests from this repository), the build
   # fails below the floor in .github/coverage-floor or when it falls more
   # than half a point below main's last measurement.
   coverage:
@@ -208,7 +208,7 @@ jobs:
       - run: cargo install cargo-deb --locked
       - run: cargo build --release --locked -p wardend -p wardenctl
       - name: The binaries need at most glibc 2.34
-        run: ./scripts/check-glibc.sh target/release/wardend target/release/wardenctl
+        run: bash ./scripts/check-glibc.sh target/release/wardend target/release/wardenctl
       - run: cargo deb -p wardend --no-build
       - name: Install the package and start it (real systemd)
         run: |
@@ -250,4 +250,4 @@ jobs:
         with:
           name: warden-deb
           path: deb
-      - run: ./scripts/test-deb-install.sh deb/*.deb
+      - run: bash ./scripts/test-deb-install.sh deb/*.deb
