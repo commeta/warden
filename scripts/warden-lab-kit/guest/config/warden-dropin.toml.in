@@ -1,0 +1,37 @@
+# Local-only Warden lab integration. Keep dry_run=true while tuning.
+[[fim.site]]
+name = "main"
+root = "/var/www/warden-lab/public"
+access_log = "/var/log/nginx/access.log"
+restart_unit = "apache2.service"
+
+[waf]
+enabled = true
+block_after = 5
+window = "10m"
+block = true
+block_ttl = "1h"
+
+[[waf.log]]
+path = "/var/log/apache2/modsec_audit.log"
+site = "main"
+format = "native"
+
+[[health.check]]
+name = "warden-lab-http"
+type = "http"
+url = "http://{{LAB_IP}}/health.php"
+expect_status = "200-399"
+unit = "nginx.service"
+interval = "30s"
+timeout = "5s"
+failures = 3
+
+[actions.firewall]
+allowlist = ["127.0.0.1/32", "::1/128"]
+
+[auth]
+allowlist = ["127.0.0.1/32", "::1/128"]
+
+[systemd]
+auto_restart = ["nginx.service", "apache2.service", "mysql.service"]

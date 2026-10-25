@@ -1,0 +1,15 @@
+[Unit]
+Description=Warden Lab local-service nftables guard (inet lab_filter)
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target wardend.service shutdown.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/warden-lab-nft-apply
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

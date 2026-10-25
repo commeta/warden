@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Local-only nftables guard. Owns only inet lab_filter; never alters inet warden.
+set -Eeuo pipefail
+TABLE=lab_filter
+MARKER=/etc/warden-lab/nft-base-managed
+[[ -f "$MARKER" ]] || { echo "Missing ownership marker $MARKER; refusing to manage inet $TABLE" >&2; exit 1; }
+command -v nft >/dev/null || { echo 'nft CLI missing; install package nftables' >&2; exit 1; }
+if ! nft list table inet "$TABLE" >/dev/null 2>&1; then nft add table inet "$TABLE"; fi
+if nft list chain inet "$TABLE" input >/dev/null 2>&1; then
+  CHAIN_INFO="$(nft list chain inet "$TABLE" input)"
+  grep -Eq 'type filter hook input.*policy accept' <<< "$CHAIN_INFO" || { echo "inet $TABLE input has an unexpected chain type or policy" >&2; exit 1; }
+else
+  nft add chain inet "$TABLE" input '{ type filter hook input priority filter - 5; policy accept; }'
+fi
+RULES="$(mktemp)"; trap 'rm -f "$RULES"' EXIT
+cat > "$RULES" <<'NFT'
+flush chain inet lab_filter input
+add rule inet lab_filter input iifname != "lo" tcp dport { 80, 443, 8080, 3306 } counter drop comment "warden-lab services loopback-only"
+NFT
+nft --check -f "$RULES"
+nft -f "$RULES"
