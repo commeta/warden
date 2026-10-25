@@ -60,6 +60,19 @@ impl Quarantine {
         site: Option<String>,
         allow: impl Fn(&Path) -> Result<(), String>,
     ) -> io::Result<Entry> {
+        self.put_inner(path, reason, site, allow, || {})
+    }
+
+    /// Internal implementation with a narrow pre-rename seam for deterministic
+    /// TOCTOU tests. Production callers pass a no-op closure through the public method.
+    fn put_inner(
+        &self,
+        path: &Path,
+        reason: &str,
+        site: Option<String>,
+        allow: impl Fn(&Path) -> Result<(), String>,
+        before_rename: impl FnOnce(),
+    ) -> io::Result<Entry> {
         let (parent, name) = safefs::split(path)?;
         let (real_parent, dir) = safefs::open_root(parent)?;
         let real = real_parent.join(OsStr::from_bytes(name.to_bytes()));
@@ -93,6 +106,9 @@ impl Quarantine {
         // directory) so that removal fails: clear those flags first.
         let mut cleared = 0;
         let mut dir_cleared = 0;
+        // Tests can deterministically replace the directory entry after the
+        // original inode has been opened and hashed, but before it is renamed.
+        before_rename();
         let mut res = safefs::rename_noreplace(dir.as_fd(), &name, slot.as_fd(), BLOB);
         if matches!(&res, Err(e) if e.raw_os_error() == Some(libc::EPERM)) {
             cleared = fsflags::clear_protection_fd(file.as_fd()).unwrap_or(0);
@@ -145,9 +161,9 @@ impl Quarantine {
     }
 
     /// Something else than the hashed file was renamed into the slot (the
-    /// name was swapped in between): put it back. If the name is taken again
-    /// by now, a symlink is dropped (removing one never touches its target)
-    /// and anything else stays in the slot, listed, for the operator.
+    /// name was swapped in between): put it back. If the name is taken again,
+    /// a symlink is dropped (removing one never touches its target) and anything
+    /// else stays in the slot, listed, for the operator.
     fn give_back(&self, slot_path: &Path, slot: &OwnedFd, dir: &OwnedFd, name: &CStr, real: &Path) -> io::Error {
         if safefs::rename_noreplace(slot.as_fd(), BLOB, dir.as_fd(), name).is_ok() {
             let _ = std::fs::remove_dir(slot_path);
@@ -188,8 +204,8 @@ impl Quarantine {
     }
 
     /// The quarantine is on another filesystem: copy from the open file into
-    /// a new blob (mode 000 from the start), sync it, then unlink the
-    /// original if its name still refers to the copied inode.
+    /// a new blob (mode 000 from the start), sync it, then unlink the original
+    /// if its name still refers to the copied inode.
     fn copy_out(
         &self,
         file: &std::fs::File,
@@ -230,10 +246,9 @@ impl Quarantine {
     /// Put a file back with its original mode, owner and mtime. The file is
     /// never written through a symlink someone other than root made: on the
     /// way to its directory only root's symlinks are followed (an operator's
-    /// `/var/www -> /srv/www`, as in entries made before 0.13.4, works; a
-    /// site user's `uploads -> /etc` does not), the name must be free (it is
-    /// never replaced), and the metadata is applied to the restored inode by
-    /// descriptor.
+    /// `/var/www -> /srv/www`, as in entries made before 0.13.4, works; a site
+    /// user's `uploads -> /etc` does not), the name must be free (it is never
+    /// replaced), and the metadata is applied to the restored inode by descriptor.
     pub fn restore(&self, id: &str) -> io::Result<Entry> {
         if id.is_empty() || id.contains('/') || id.contains("..") {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad id"));
@@ -367,60 +382,63 @@ mod tests {
         assert!(q.list().is_empty());
     }
 
-    /// The webshell is swapped for a symlink to a victim file, over and
-    /// over, while it is quarantined. 0.13.3 could `chmod 000` the victim
-    /// (`set_permissions` on the blob path followed the symlink it renamed).
+    /// A replacement in the open-to-rename window must not quarantine a symlink
+    /// or change the target of that symlink. The hook makes the TOCTOU window
+    /// deterministic instead of depending on thread scheduling.
     #[test]
     fn put_survives_a_file_symlink_swap_race() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
         let d = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let victim = outside.path().join("victim");
         std::fs::write(&victim, "data").unwrap();
         std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o644)).unwrap();
+
         let site = d.path().join("site");
         std::fs::create_dir(&site).unwrap();
-        let q = Quarantine::new(d.path().join("q"));
-        let stop = Arc::new(AtomicBool::new(false));
-        let (f, v, s) = (site.join("shell.php"), victim.clone(), stop.clone());
-        let flipper = std::thread::spawn(move || {
-            let tmp = f.with_extension("tmp");
-            while !s.load(Ordering::Relaxed) {
-                // (never `write` the name itself: it may be the symlink)
-                let _ = std::fs::write(&tmp, "<?php eval($_POST[1]);");
-                let _ = std::fs::rename(&tmp, &f);
-                std::thread::yield_now();
-                let _ = std::fs::remove_file(&f);
-                let _ = std::os::unix::fs::symlink(&v, &f);
-                std::thread::yield_now();
-                let _ = std::fs::remove_file(&f);
-            }
-        });
-        let (mut done, started) = (0, std::time::Instant::now());
-        while done < 20 && started.elapsed() < std::time::Duration::from_secs(3) {
-            if q.put(&site.join("shell.php"), "t", None, any).is_ok() {
-                done += 1;
-            }
-        }
-        stop.store(true, Ordering::Relaxed);
-        flipper.join().unwrap();
-        assert!(done > 0, "the race was not exercised");
-        assert_eq!(std::fs::metadata(&victim).unwrap().mode() & 0o777, 0o644, "the victim was chmod-ed");
-        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "data");
-        for e in q.list() {
-            let b = d.path().join("q").join(&e.id).join("blob");
-            let md = std::fs::symlink_metadata(&b).unwrap();
-            assert!(md.is_file(), "a symlink was quarantined");
-            if !e.reason.starts_with("displaced") {
-                assert_eq!(md.mode() & 0o777, 0);
-                assert_eq!(e.hash, blake3::hash(&std::fs::read(&b).unwrap()).to_hex().to_string());
-            }
-        }
-        // no half-made slots are left behind
-        for slot in std::fs::read_dir(d.path().join("q")).unwrap() {
-            assert!(slot.unwrap().path().join("meta.json").exists());
-        }
+        let shell = site.join("shell.php");
+        std::fs::write(&shell, "<?php eval($_POST[1]);").unwrap();
+
+        let quarantine_dir = d.path().join("q");
+        let q = Quarantine::new(&quarantine_dir);
+        let err = q
+            .put_inner(&shell, "t", None, any, || {
+                // The original file has already been opened and hashed. Replace
+                // its name exactly before renameat2 moves that directory entry.
+                std::fs::remove_file(&shell).unwrap();
+                std::os::unix::fs::symlink(&victim, &shell).unwrap();
+            })
+            .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::Other, "{err}");
+        assert!(
+            err.to_string().contains("file changed while it was being quarantined"),
+            "unexpected error: {err}"
+        );
+
+        let shell_meta = std::fs::symlink_metadata(&shell).unwrap();
+        assert!(shell_meta.file_type().is_symlink(), "replacement is not a symlink");
+        assert_eq!(std::fs::read_link(&shell).unwrap(), victim);
+
+        assert_eq!(
+            std::fs::metadata(&victim).unwrap().mode() & 0o777,
+            0o644,
+            "the victim's permissions changed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "data",
+            "the victim's contents changed"
+        );
+
+        assert!(q.list().is_empty(), "failed put left a listed quarantine entry");
+        assert_eq!(
+            std::fs::read_dir(&quarantine_dir).unwrap().count(),
+            0,
+            "failed put left a partial quarantine slot"
+        );
+
+        // Leave the temporary test tree tidy; this only removes the symlink.
+        std::fs::remove_file(&shell).unwrap();
     }
 
     #[test]
