@@ -1,0 +1,550 @@
+==> Source ref: main
+
+==> Log file: /var/log/warden-lab/source-tests/20261025T211155Z.log
+
+==> Installed Debian package version: 0.14.1-1
+
+==> Installed daemon service state before tests: active
+
+==> Updating existing source checkout
+From https://github.com/commeta/warden
+ * branch            main       -> FETCH_HEAD
+HEAD is now at 7b9e49a Add files via upload
+Source commit: 7b9e49ada42d31264e092785a4609e037f44948d
+Commit subject: Add files via upload
+Commit date: 2026-10-25T23:37:46+03:00
+Rust compiler: rustc 1.99.1 (58cf8f9c3 2026-10-13)
+
+==> Running full workspace tests as root (single test thread)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.37s
+     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_core-e1872225f1b1c0ea)
+
+running 62 tests
+test action::tests::cooldown_key_tells_playbook_steps_apart ... ok
+test action::tests::rejects_unknown_action_and_missing_fields ... ok
+test action::tests::short_and_full_forms ... ok
+test condition::tests::a_severity_change_is_reported_at_once ... ok
+test condition::tests::backoff_doubles_and_is_capped ... ok
+test condition::tests::opens_reminds_with_backoff_and_closes ... ok
+test condition::tests::reminders_follow_the_real_clock ... ok
+test condition::tests::sweep_only_touches_the_kinds_that_were_checked ... ok
+test config::tests::cleanup_globs_are_validated ... ok
+test config::tests::command_users_are_found_everywhere_and_validated ... ok
+test config::tests::empty_config_is_valid ... ok
+test config::tests::every_glob_list_and_interval_is_validated ... ok
+test config::tests::new_sections_parse_and_validate ... ok
+test config::tests::site_defaults_apply ... ok
+test config::tests::unknown_fields_are_rejected ... ok
+test config::tests::validation_catches_inverted_thresholds ... ok
+test event::tests::a_resolution_ends_the_condition_whatever_detail_its_fingerprint_carries ... ok
+test event::tests::event_roundtrips_json ... ok
+test event::tests::hook_env_is_bounded ... ok
+test event::tests::ids_are_monotonic ... ok
+test event::tests::severity_order_and_parse ... ok
+test glob::tests::names ... ok
+test glob::tests::roots ... ok
+test glob::tests::star_does_not_cross_slash ... ok
+test ipc::tests::request_wire_format ... ok
+test load::tests::a_dropin_appends_records ... ok
+test load::tests::a_dropin_replaces_playbooks ... ok
+test load::tests::appended_keys_exist ... ok
+test load::tests::merges_dropins ... ok
+test load::tests::missing_main_file_yields_defaults ... ok
+test load::tests::reports_file_and_line ... ok
+test net::tests::cidr_matching ... ok
+test policy::tests::a_policy_that_takes_the_block_away_says_so ... ok
+test policy::tests::escalate_and_add_actions ... ok
+test policy::tests::invalid_rules_are_reported ... ok
+test policy::tests::non_matching_rule_passes_through ... ok
+test policy::tests::suppress_by_detail_regex ... ok
+test protect::tests::a_name_alone_does_not_protect_an_impostor ... ok
+test protect::tests::default_protection ... ok
+test ratelimit::tests::an_unused_reservation_is_given_back ... ok
+test ratelimit::tests::checking_a_cooldown_does_not_arm_it ... ok
+test ratelimit::tests::cooldown_per_key ... ok
+test ratelimit::tests::counter_rate ... ok
+test ratelimit::tests::floods_of_distinct_keys_stay_cheap_and_bounded ... ok
+test ratelimit::tests::keyed_window_counts ... ok
+test ratelimit::tests::peek_does_not_count ... ok
+test ratelimit::tests::sliding_window_limits ... ok
+test redact::tests::events_lose_secrets_but_keep_their_shape ... ok
+test redact::tests::leaves_ordinary_text_alone ... ok
+test redact::tests::masks_credentials_in_text ... ok
+test sustain::tests::interruption_resets_sustain ... ok
+test sustain::tests::repeats_while_active_and_clears_with_hysteresis ... ok
+test sustain::tests::requires_sustain_before_raising ... ok
+test sustain::tests::steps_down_to_warning ... ok
+test sync::tests::survives_poisoning ... ok
+test tuning::tests::caps_scale_with_ram ... ok
+test tuning::tests::check_rejects_unsafe ... ok
+test tuning::tests::growth_is_bounded ... ok
+test units::tests::deserializes_from_int_or_string ... ok
+test units::tests::displays_sizes ... ok
+test units::tests::parses_sizes ... ok
+test units::tests::truncate_cuts_on_characters ... ok
+
+test result: ok. 62 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+     Running tests/reference_config.rs (/var/tmp/warden-lab-source-target/debug/deps/reference_config-ee8393926c2a861d)
+
+running 3 tests
+test defaults_roundtrip_through_toml ... ok
+test profiles_merge_with_reference ... ok
+test reference_config_is_valid_and_matches_defaults ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_detect-5ad1b0aa05da92b9)
+
+running 131 tests
+test auth::tests::a_user_name_cannot_choose_the_address_that_gets_blocked ... ok
+test auth::tests::allowlisted_ip_is_not_blocked ... ok
+test auth::tests::bruteforce_then_block_then_success ... ok
+test auth::tests::journal_lines_need_a_sender_that_the_kernel_vouches_for ... ok
+test auth::tests::real_sshd_lines_still_match ... ok
+test auth::tests::sudo_and_accounts ... ok
+test auth::tests::syslog_split ... ok
+test auth::tests::tables_stay_bounded_under_a_flood_of_sources ... ok
+test disk::tests::a_reload_keeps_the_disk_detectors_memory ... ok
+test disk::tests::a_useless_cleanup_is_remembered_across_a_restart ... ok
+test disk::tests::cleanup_history_encoding_drops_stale_and_garbage ... ok
+test disk::tests::inode_incidents_step_down_remind_with_backoff_and_resolve ... ok
+test disk::tests::largest_files_finds_big_ones ... ok
+test disk::tests::readonly_is_reported_at_startup_and_resolved_when_writable ... ok
+test disk::tests::reminders_back_off_and_useless_cleanup_pauses ... ok
+test disk::tests::slope_of_linear_growth ... ok
+test disk::tests::the_file_walk_stops_as_a_whole_at_its_budgets ... ok
+test disk::tests::usage_report_runs_once_in_background_and_is_reported ... ok
+test disk::tests::watches_root_filesystem ... ok
+test disk::tests::who_is_using_the_disk_is_asked_at_once_when_critical ... ok
+test fim::correlate::tests::a_forged_time_in_the_user_field_is_not_taken ... ok
+test fim::correlate::tests::a_line_from_the_future_does_not_empty_the_ring ... ok
+test fim::correlate::tests::a_non_ascii_zone_does_not_panic ... ok
+test fim::correlate::tests::clf_time ... ok
+test fim::correlate::tests::combined_log_line ... ok
+test fim::correlate::tests::out_of_range_times_are_rejected ... ok
+test fim::correlate::tests::ring_is_bounded_by_age ... ok
+test fim::correlate::tests::suspects_rank_rare_posts_first ... ok
+test fim::signatures::tests::all_builtin_rules_compile ... ok
+test fim::signatures::tests::clean_code_scores_zero ... ok
+test fim::signatures::tests::detects_classic_php_shells ... ok
+test fim::signatures::tests::detects_node_python_and_config_abuse ... ok
+test fim::signatures::tests::entropy_and_polyglots ... ok
+test fim::signatures::tests::shipped_example_rules_are_valid ... ok
+test fim::signatures::tests::user_rules_are_loaded ... ok
+test fim::store::tests::baseline_roundtrip_and_meta ... ok
+test fim::store::tests::walker_respects_include_exclude_and_prunes ... ok
+test fim::tests::a_mass_change_with_malicious_code_kills_only_its_writer ... ok
+test fim::tests::a_mass_change_without_malicious_code_kills_nobody ... ok
+test fim::tests::baseline_then_detect_infection ... ok
+test fim::tests::offline_scan ... ok
+test fim::tests::realtime_correlation_ignores_a_backdated_mtime ... ok
+test fim::tests::realtime_write_by_trusted_tool_is_accepted ... ok
+test hardware::tests::an_unsynchronised_clock_is_reported_after_15_minutes_once ... ok
+test hardware::tests::clock_check_ignores_growing_max_error ... ok
+test hardware::tests::ecc_errors_are_reported_as_they_grow ... ok
+test hardware::tests::temperature_needs_a_minute_and_five_to_clear ... ok
+test health::tests::http_probe_status_and_body ... ok
+test health::tests::hysteresis_grace_and_recovery ... ok
+test health::tests::tcp_and_command_probes ... ok
+test heuristics::tests::an_address_the_source_chose_not_to_block_is_blocked_only_by_a_source_that_blocks ... ok
+test heuristics::tests::ip_threshold_blocks ... ok
+test heuristics::tests::lineage_learning_and_persistence ... ok
+test heuristics::tests::scores_accumulate_and_escalate_once ... ok
+test heuristics::tests::scores_decay ... ok
+test heuristics::tests::withheld_evidence_never_triggers_containment ... ok
+test integrity::tests::batch_dpkg_verification_reads_md5sums_once ... ok
+test integrity::tests::classification ... ok
+test integrity::tests::dpkg_verification_of_a_packaged_binary ... ok
+test integrity::tests::expand_and_suid ... ok
+test integrity::tests::expansion_does_not_walk_unrelated_trees ... ok
+test integrity::tests::suid_walks_and_realtime_candidates_update_the_baseline ... ok
+test integrity::tests::uid0_detection_and_diff ... ok
+test kernel::tests::apparmor_denial ... ok
+test kernel::tests::floods_are_rate_limited_and_bursts_escalate ... ok
+test kernel::tests::fs_and_io_errors ... ok
+test kernel::tests::oom_kill_message ... ok
+test kernel::tests::user_patterns_and_no_match ... ok
+test limits::tests::file_handles_warn_go_critical_suggest_growth_and_recover ... ok
+test limits::tests::network_conditions_resolve_and_vanished_interfaces_are_forgotten ... ok
+test limits::tests::network_counters_become_rates_and_need_to_be_sustained ... ok
+test limits::tests::pid_usage_is_measured_against_the_binding_limit ... ok
+test limits::tests::thresholds_track_independently ... ok
+test limits::tests::with_auto_grow_the_limit_is_raised_by_an_action ... ok
+test memory::tests::a_kill_that_did_not_happen_is_not_judged ... ok
+test memory::tests::a_kill_that_frees_nothing_stops_further_kills ... ok
+test memory::tests::a_reload_during_an_incident_keeps_it ... ok
+test memory::tests::a_swap_storm_needs_paging_and_stall_held_for_a_minute ... ok
+test memory::tests::effective_kills_are_capped_per_episode ... ok
+test memory::tests::low_available_memory_alone_is_critical ... ok
+test memory::tests::oom_kills_are_reported_once_per_increase_unless_kmsg_does_it ... ok
+test memory::tests::paging_activity_is_sampled_while_memory_is_elevated ... ok
+test memory::tests::pressure_rises_repeats_while_critical_and_resolves ... ok
+test memory::tests::ranking_on_live_system ... ok
+test memory::tests::thresholds_scale_with_ram ... ok
+test pressure::tests::a_fork_storm_needs_two_hot_samples_and_is_rate_limited ... ok
+test pressure::tests::cpu_pressure_must_be_sustained_and_clears_with_hysteresis ... ok
+test pressure::tests::cpu_saturation_goes_critical_with_its_actions ... ok
+test pressure::tests::io_stall_raises_names_the_level_and_resolves ... ok
+test process::tests::a_reload_is_not_a_first_scan ... ok
+test process::tests::allowed_tool_through_shell_is_quiet ... ok
+test process::tests::apache_master_helpers_and_cgi_are_not_webshells ... ok
+test process::tests::creds_from_the_fast_path_keep_setuid_detection ... ok
+test process::tests::database_spawning_shell ... ok
+test process::tests::exec_fast_path_still_sees_scripts_and_ld_preload ... ok
+test process::tests::exec_pipeline_learns_a_fast_path_and_rechecks ... ok
+test process::tests::limit_rule_matching ... ok
+test process::tests::limit_rule_reads_user_and_cgroup_only_when_needed ... ok
+test process::tests::masquerade_fileless_miner ... ok
+test process::tests::privilege_changes_and_web_parents_never_take_the_fast_path ... ok
+test process::tests::root_shell_from_user_process_is_privesc ... ok
+test process::tests::state_findings_open_remind_and_resolve ... ok
+test process::tests::uid_transition_rules ... ok
+test process::tests::unknown_suid_and_writable_exec ... ok
+test process::tests::upgrades_and_real_programs_are_not_attacks ... ok
+test process::tests::warden_s_own_commands_are_not_web_workers ... ok
+test process::tests::webshell_spawn_with_red_flags_is_critical_and_killed ... ok
+test prof::tests::scopes_and_ticks ... ok
+test runtime::tests::a_reload_keeps_a_detector_whose_configuration_did_not_change ... ok
+test runtime::tests::a_reload_that_changes_the_section_reconfigures_or_rebuilds_and_closes ... ok
+test runtime::tests::disabled_components_have_no_thread ... ok
+test runtime::tests::interned_names_are_shared ... ok
+test runtime::tests::metrics_render ... ok
+test runtime::tests::scheduler_survives_panics ... ok
+test runtime::tests::worker_survives_a_panic_and_keeps_serving ... ok
+test systemd::tests::a_failed_oneshot_started_by_its_timer_does_not_flap ... ok
+test systemd::tests::parses_list_units ... ok
+test systemd::tests::state_changes_drive_failure_and_recovery ... ok
+test tuning::tests::database_server_on_big_box ... ok
+test tuning::tests::live_gather_does_not_panic ... ok
+test tuning::tests::small_vps_without_swap_and_weak_hardening ... ok
+test tuning::tests::suid_dumpable_depends_on_where_core_dumps_go ... ok
+test tuning::tests::well_tuned_host_is_quiet ... ok
+test util::tests::tail_follows_rotation_and_truncation ... ok
+test waf::tests::apache_error_log ... ok
+test waf::tests::detection_only_and_ignored_rules ... ok
+test waf::tests::ipv6_and_ports ... ok
+test waf::tests::json_v3_and_v2 ... ok
+test waf::tests::native_serial ... ok
+test waf::tests::nginx_error_log ... ok
+test waf::tests::tracker_blocks_persistent_attacker_once ... ok
+
+test result: ok. 131 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.58s
+
+     Running tests/fingerprints.rs (/var/tmp/warden-lab-source-target/debug/deps/fingerprints-fc7407215ffd3831)
+
+running 1 test
+test every_fingerprint_follows_the_convention ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/review_0_13.rs (/var/tmp/warden-lab-source-target/debug/deps/review_0_13-7ca5fd805562deb5)
+
+running 6 tests
+test a_unit_that_is_only_restarting_is_not_reported_as_recovered ... ok
+test ages_in_events_are_measured_with_a_clock_that_runs_in_suspend ... ok
+test heuristics_do_not_block_what_the_operator_said_not_to_block ... ok
+test link_down_and_link_up_share_a_fingerprint ... ok
+test rewriting_a_file_with_identical_content_is_not_reported ... ok
+test suid_dumpable_2_with_a_core_pipe_is_not_flagged ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+     Running tests/suspend.rs (/var/tmp/warden-lab-source-target/debug/deps/suspend-5d2c83b8adbe89a6)
+
+running 1 test
+test a_daily_suid_walk_is_due_after_a_day_even_if_the_machine_slept_through_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.23s
+
+     Running tests/systemd_dbus.rs (/var/tmp/warden-lab-source-target/debug/deps/systemd_dbus-2d0e34aaab6ec69e)
+
+running 2 tests
+test a_dead_bus_is_an_error_not_a_hang ... ok
+test unit_failures_arrive_over_dbus ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.51s
+
+     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_fuzz-01668bb6bae01a36)
+
+running 3 tests
+test tests::seeds_exercise_the_parsers ... ok
+test tests::smoke_run_of_every_target ... ok
+test tests::write_corpus ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s
+
+     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_respond-f790d55c8c7da334)
+
+running 42 tests
+test cleanup::tests::age_from_newest_keeps_a_file_that_is_still_read ... ok
+test cleanup::tests::delete_and_truncate_in_tmp ... ok
+test cleanup::tests::delete_old_does_not_follow_a_symlinked_directory ... ok
+test cleanup::tests::delete_old_stops_at_max_files ... ok
+test cleanup::tests::delete_old_survives_a_directory_symlink_swap_race ... ok
+test cleanup::tests::deleted_open_file_is_released ... ok
+test cleanup::tests::refuses_system_paths ... ok
+test cleanup::tests::tmp_semantics_newest_time_and_exclusions ... ok
+test cleanup::tests::truncate_large_does_not_follow_a_symlinked_file ... ok
+test cleanup::tests::truncate_large_survives_a_file_symlink_swap_race ... ok
+test firewall::tests::parses_nft_json ... ok
+test firewall::tests::refuses_allowlisted_block ... ok
+test firewall::tests::ruleset_and_allowlist ... ok
+test guard::tests::cleanup_rules ... ok
+test guard::tests::normalization ... ok
+test guard::tests::quarantine_rules ... ok
+test quarantine::tests::put_list_restore ... ok
+test quarantine::tests::put_refuses_a_symlink_and_a_path_outside_the_policy ... ok
+test quarantine::tests::put_survives_a_file_symlink_swap_race ... ok
+test quarantine::tests::quarantines_immutable_webshell_in_immutable_dir ... ok
+test quarantine::tests::restore_follows_roots_own_symlink ... ok
+test quarantine::tests::restore_keeps_owner_and_setuid_bits ... ok
+test quarantine::tests::restore_never_replaces_and_never_follows ... ok
+test snapshot::tests::snapshot_and_retention ... ok
+test tests::a_forking_tree_is_killed_as_a_whole ... ok
+test tests::a_genuine_program_keeps_the_protection_its_name_gives ... ok
+test tests::a_process_that_only_carries_a_protected_name_can_be_killed ... ok
+test tests::budgets_are_charged_only_for_attempted_actions ... ok
+test tests::dry_run_does_nothing ... ok
+test tests::exec_hooks_cannot_wedge_the_executor ... ok
+test tests::exec_hooks_run_as_the_configured_user ... ok
+test tests::handles_are_shared_and_follow_reconfiguration ... ok
+test tests::kill_budget_trips ... ok
+test tests::kills_and_respects_cooldown_and_reuse ... ok
+test tests::lanes_share_the_budgets_but_not_the_wait ... ok
+test tests::quarantine_via_event_and_guard ... ok
+test tests::refuses_protected_and_self ... ok
+test tests::steps_of_one_playbook_do_not_cool_each_other_down ... ok
+test tests::sysctl_action_is_gated ... ok
+test tests::throttle_lowers_priority ... ok
+test tests::unit_restarts_follow_the_configured_budget ... ok
+test tune::tests::apply_journal_persist_revert ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.12s
+
+     Running tests/review_0_13.rs (/var/tmp/warden-lab-source-target/debug/deps/review_0_13-f341872e91d6c8be)
+
+running 2 tests
+test a_dry_run_does_not_start_the_cooldown_of_the_real_action ... ok
+test a_refused_action_does_not_start_the_cooldown ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/suspend.rs (/var/tmp/warden-lab-source-target/debug/deps/suspend-ec93d8a9028f5338)
+
+running 1 test
+test a_cooldown_and_the_hourly_budget_run_on_while_the_machine_sleeps ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_sys-82934008eb00fd5c)
+
+running 91 tests
+test cgroup::tests::containers ... ok
+test cgroup::tests::dir_mapping ... ok
+test cgroup::tests::memory_breakdown ... ok
+test cgroup::tests::refuses_top_level ... ok
+test cgroup::tests::unit_lookup ... ok
+test clock::tests::suspend_time_is_added_and_never_taken_back ... ok
+test clock::tests::the_real_clock_runs_with_the_monotonic_one_while_awake ... ok
+test cmd::tests::a_timeout_kills_what_the_program_started ... ok
+test cmd::tests::background_child_holding_the_pipes_does_not_hang_us ... ok
+test cmd::tests::chatty_program_neither_blocks_nor_grows_memory ... ok
+test cmd::tests::output_status_and_env ... ok
+test cmd::tests::program_that_ignores_stdin_does_not_deadlock ... ok
+test cmd::tests::runs_as_another_user_without_capabilities ... ok
+test cmd::tests::stdin_is_fed_including_large_input ... ok
+test cmd::tests::timeout_kills_promptly ... ok
+test dbus::tests::big_endian_messages_are_readable ... ok
+test dbus::tests::empty_structs_are_refused_instead_of_looping ... ok
+test dbus::tests::marshal_roundtrip_of_nested_types ... ok
+test dbus::tests::message_encoding_matches_the_spec ... ok
+test dbus::tests::unit_path_escaping ... ok
+test du::tests::a_paced_walk_finds_the_same ... ok
+test du::tests::aggregates_by_level_and_counts_hard_links_once ... ok
+test du::tests::budgets_make_partial_reports ... ok
+test du::tests::wide_trees_cost_no_memory_per_sibling_and_deep_ones_are_cut_off ... ok
+test fanotify::tests::parses_metadata_records ... ok
+test fanotify_fid::tests::chmod_setuid_is_reported ... ok
+test fanotify_fid::tests::parses_dfid_name_records ... ok
+test fsflags::tests::immutable_roundtrip_when_supported ... ok
+test hw::tests::edac_controllers_are_read_in_order_and_incomplete_ones_skipped ... ok
+test hw::tests::thermal_zones_in_millidegrees_and_nonsense_dropped ... ok
+test kernel::tests::clock_query_does_not_fail ... ok
+test kernel::tests::modules_parsing ... ok
+test kernel::tests::taint_decoding ... ok
+test kmsg::tests::parses_records ... ok
+test mem::tests::meminfo_parsing ... ok
+test mem::tests::vmstat_parsing ... ok
+test mounts::tests::an_escape_above_255_is_text_not_an_overflow ... ok
+test mounts::tests::parses_mountinfo ... ok
+test mounts::tests::statvfs_root ... ok
+test net::tests::net_dev_parsing ... ok
+test net::tests::snmp_pairs ... ok
+test net::tests::tcp_table ... ok
+test pace::tests::a_busy_disk_spreads_the_work ... ok
+test pace::tests::a_disabled_pacer_never_sleeps ... ok
+test pace::tests::a_quiet_disk_costs_only_the_probes ... ok
+test pace::tests::controller_backs_off_under_pressure_and_recovers ... ok
+test pace::tests::scheduled_scans_wait_for_a_quiet_disk_but_not_for_ever ... ok
+test pace::tests::scheduler_of_the_root_filesystem ... ok
+test pace::tests::the_others_are_seen_while_working_too ... ok
+test pagecache::tests::cold_read_evicts_only_cold_files ... ok
+test pidfd::tests::refuses_init ... ok
+test pidfd::tests::terminates_child_and_detects_reuse ... ok
+test proc_connector::tests::concatenated_and_truncated ... ok
+test proc_connector::tests::live_filtered_subscription_sees_exec_but_not_fork ... ok
+test proc_connector::tests::parses_exec_uid_fork ... ok
+test process::tests::another_mount_namespace_is_not_the_host ... ok
+test process::tests::cmdline_env_cgroup_limits ... ok
+test process::tests::descendants_are_found_by_the_parent_chain ... ok
+test process::tests::descendants_walk ... ok
+test process::tests::exe_names ... ok
+test process::tests::fd_count_and_stdio_targets ... ok
+test process::tests::genuine_needs_matching_name_and_root_owned_binary ... ok
+test process::tests::light_snapshot_matches_full_one_for_self ... ok
+test process::tests::own_process_is_readable ... ok
+test process::tests::stat_with_hostile_comm ... ok
+test process::tests::status_parsing ... ok
+test process::tests::system_binaries_are_the_running_root_owned_files_in_system_directories ... ok
+test psi::tests::cpu_without_full ... ok
+test psi::tests::parses_some_and_full ... ok
+test psi::tests::rejects_garbage ... ok
+test safefs::tests::a_directory_swapped_for_a_symlink_never_redirects_deletion ... ok
+test safefs::tests::a_file_root_is_visited_alone ... ok
+test safefs::tests::a_symlinked_root_is_resolved_but_nothing_below_it ... ok
+test safefs::tests::open_dir_nofollow_refuses_a_symlink_on_the_way ... ok
+test safefs::tests::open_root_follows_only_trusted_symlinks ... ok
+test safefs::tests::open_root_refuses_a_foreign_symlink ... ok
+test safefs::tests::rename_noreplace_never_overwrites ... ok
+test safefs::tests::unlink_and_truncate_check_the_inode ... ok
+test safefs::tests::walks_without_following_symlinks ... ok
+test selfstat::tests::a_peak_is_returned_even_under_mlockall ... ok
+test selfstat::tests::thread_usage_moves ... ok
+test selfstat::tests::threads_and_process ... ok
+test sysctl::tests::keys_map_to_paths_and_reject_traversal ... ok
+test system::tests::kernel_versions ... ok
+test system::tests::loadavg_parsing ... ok
+test system::tests::stat_parsing ... ok
+test users::tests::lookups ... ok
+test users::tests::passwd_parsing ... ok
+test util::tests::kv_and_kb ... ok
+test util::tests::read_record_handles_short_and_long_files ... ok
+test util::tests::write_atomic_replaces_whole_files_and_leaves_nothing_behind ... ok
+
+test result: ok. 91 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 778.15s
+
+     Running unittests src/main.rs (/var/tmp/warden-lab-source-target/debug/deps/wardenctl-b276b4b581fe1954)
+
+running 5 tests
+test tests::diagnoses_old_unit_sigsys_crash ... ok
+test tests::du_text_explains_hidden_space ... ok
+test tests::healthy_unit ... ok
+test tests::not_installed ... ok
+test tests::pacing_line ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/var/tmp/warden-lab-source-target/debug/deps/wardend-d0b7693ff2e01ce6)
+
+running 31 tests
+test dryrun::tests::an_edit_of_the_configuration_wins_over_an_older_override ... ok
+test dryrun::tests::an_unwritable_state_dir_is_reported ... ok
+test dryrun::tests::override_survives_reload_and_restart ... ok
+test dryrun::tests::reset_and_cli ... ok
+test engine::tests::a_condition_that_comes_back_after_its_resolution_is_recorded_again ... ok
+test engine::tests::containment_does_not_queue_behind_cleanups ... ok
+test engine::tests::engine_pipeline ... ok
+test engine::tests::result_events ... ok
+test eventlog::tests::a_failed_rotation_backs_off ... ok
+test eventlog::tests::a_partial_last_line_is_repaired_on_open ... ok
+test eventlog::tests::ids_resume_after_the_journal ... ok
+test eventlog::tests::the_engine_side_hands_lines_to_the_writer_thread ... ok
+test eventlog::tests::write_errors_are_counted_and_the_journal_recovers ... ok
+test eventlog::tests::writes_and_rotates ... ok
+test notify::tests::a_flap_is_notified_in_full ... ok
+test notify::tests::a_resolution_goes_only_where_its_condition_went ... ok
+test notify::tests::command_notifier_gets_stdin ... ok
+test notify::tests::command_notifier_gets_the_event_and_reports_failures ... ok
+test notify::tests::dedup_and_escalation ... ok
+test notify::tests::secrets_do_not_leave_the_host ... ok
+test notify::tests::text_rendering ... ok
+test queue::tests::a_flood_of_noise_cannot_push_out_what_matters ... ok
+test queue::tests::important_events_drop_only_for_one_another ... ok
+test queue::tests::pop_waits_for_a_push ... ok
+test queue::tests::priorities ... ok
+test server::tests::a_failing_accept_does_not_end_the_server ... ok
+test server::tests::concurrent_clients_are_capped_before_accepting ... ok
+test server::tests::control_socket_is_private_from_the_start ... ok
+test server::tests::exhaustion_is_recognised ... ok
+test server::tests::request_lines_are_bounded ... ok
+test tests::a_reload_names_the_settings_that_need_a_restart ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.97s
+
+     Running tests/end_to_end.rs (/var/tmp/warden-lab-source-target/debug/deps/end_to_end-6f36943f912c4333)
+
+running 2 tests
+test a_busy_executor_does_not_stall_control_health_or_shutdown ... 2026-10-25T21:26:06.479138Z ERROR backend failed 1 consecutive health checks: 127.0.0.1:36835: Connection refused (os error 111) kind=health.down id=1792963566476001 severity=critical subject=system
+2026-10-25T21:26:23.525172Z  WARN stopping with threads still busy components=[] responder_busy=true
+ok
+test daemon_detects_and_remediates ... 2026-10-25T21:26:24.237419Z  WARN / is 84.9% full (1.6GiB free of 11.2GiB) kind=disk.space id=1792963583622001 subject=mount /
+2026-10-25T21:26:24.239971Z  WARN delete_old mount / → done: deleted 3 file(s), freed 12.0KiB kind=action.delete_old id=1792963583622002 subject=mount /
+2026-10-25T21:26:24.470787Z  WARN /boot is 5.6% full (1.7GiB free of 1.9GiB) kind=disk.space id=1792963583622003 subject=mount /boot
+2026-10-25T21:26:24.493613Z  WARN root executed /var/tmp/warden-lab-source-target/debug/deps/end_to_end-6f36943f912c4333 from a writable location kind=security.exec_from_writable id=1792963583622005 subject=process end_to_end-6f36[36671] user=root exe=/var/tmp/warden-lab-source-target/debug/deps/end_to_end-6f36943f912c4333
+2026-10-25T21:26:24.506939Z  WARN root executed /var/tmp/warden-lab-source-target/debug/wardend from a writable location kind=security.exec_from_writable id=1792963583622006 subject=process wardend[36685] user=root exe=/var/tmp/warden-lab-source-target/debug/wardend
+2026-10-25T21:26:24.519525Z  WARN limit "long sleeper": sleep[36683] running for 18s (limit 1s) kind=process.limit_exceeded id=1792963583622007 subject=process sleep[36683] user=root exe=/usr/bin/sleep
+2026-10-25T21:26:24.520730Z  WARN throttle sleep[36683] user=root exe=/usr/bin/sleep → done: 1 thread(s) set to nice 19 and idle I/O class; undo with `renice 0 -p 36683` kind=action.throttle id=1792963583622009 subject=process sleep[36683] user=root exe=/usr/bin/sleep
+2026-10-25T21:26:24.625373Z ERROR backend failed 2 consecutive health checks: 127.0.0.1:40727: Connection refused (os error 111) kind=health.down id=1792963583622011 severity=critical subject=system
+2026-10-25T21:26:24.682651Z  WARN SSH brute force from 192.0.2.99: 3 failures within 600s kind=security.ssh_bruteforce id=1792963583622013 subject=ip 192.0.2.99
+2026-10-25T21:26:24.683304Z  WARN exec sh → done: exit 0 (as nobody):  kind=action.exec id=1792963583622015 subject=system
+2026-10-25T21:26:24.689404Z  WARN 198.51.100.4: 2 requests blocked by ModSecurity within 600s — persistent attacker kind=security.waf_attack id=1792963583622017 subject=ip 198.51.100.4
+2026-10-25T21:26:25.716460Z  WARN limit "long sleeper": sleep[36701] running for 1s (limit 1s) kind=process.limit_exceeded id=1792963583622018 subject=process sleep[36701] user=root exe=/usr/bin/sleep
+2026-10-25T21:26:25.717438Z  WARN throttle sleep[36701] user=root exe=/usr/bin/sleep → done: 1 thread(s) set to nice 19 and idle I/O class; undo with `renice 0 -p 36701` kind=action.throttle id=1792963583622019 subject=process sleep[36701] user=root exe=/usr/bin/sleep
+2026-10-25T21:26:27.839292Z ERROR malicious code in site demo: /uploads/x.php (score 230: php-eval-decode, php-error-suppressed-eval, script-in-upload-dir) kind=security.webshell id=1792963583622022 severity=critical subject=file /tmp/.tmpQMDFHB/www/uploads/x.php (site demo)
+2026-10-25T21:26:27.840417Z  WARN quarantine /tmp/.tmpQMDFHB/www/uploads/x.php → done: quarantined as 1792963587839-8de42c6f9963 (restore: wardenctl quarantine restore 1792963587839-8de42c6f9963) kind=action.quarantine id=1792963583622023 subject=file /tmp/.tmpQMDFHB/www/uploads/x.php (site demo)
+2026-10-25T21:26:34.789308Z ERROR new SUID/SGID file: /tmp/.tmpQMDFHB/suidroot/rootme (mode 4755) kind=security.new_suid id=1792963583622025 severity=critical subject=file /tmp/.tmpQMDFHB/suidroot/rootme
+2026-10-25T21:26:35.099021Z  WARN detector tick was slow detector="integrity" took=5.193817443s
+2026-10-25T21:26:35.299476Z  WARN dry-run mode changed via control socket enabled=true source="override"
+2026-10-25T21:26:35.323168Z  WARN dry-run mode changed via control socket enabled=false source="config"
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.89s
+
+   Doc-tests warden_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests warden_detect
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests warden_fuzz
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests warden_respond
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests warden_sys
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+==> Finished
+Source commit: 7b9e49ada42d31264e092785a4609e037f44948d
+Debian package still installed: 0.14.1-1
+Daemon service state after tests: active
+Full log: /var/log/warden-lab/source-tests/20261025T211155Z.log
+Cargo target directory: /var/tmp/warden-lab-source-target
