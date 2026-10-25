@@ -410,32 +410,17 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::Other, "{err}");
-        assert!(
-            err.to_string().contains("file changed while it was being quarantined"),
-            "unexpected error: {err}"
-        );
+        assert!(err.to_string().contains("file changed while it was being quarantined"), "unexpected error: {err}");
 
         let shell_meta = std::fs::symlink_metadata(&shell).unwrap();
         assert!(shell_meta.file_type().is_symlink(), "replacement is not a symlink");
         assert_eq!(std::fs::read_link(&shell).unwrap(), victim);
 
-        assert_eq!(
-            std::fs::metadata(&victim).unwrap().mode() & 0o777,
-            0o644,
-            "the victim's permissions changed"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&victim).unwrap(),
-            "data",
-            "the victim's contents changed"
-        );
+        assert_eq!(std::fs::metadata(&victim).unwrap().mode() & 0o777, 0o644, "the victim's permissions changed");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "data", "the victim's contents changed");
 
         assert!(q.list().is_empty(), "failed put left a listed quarantine entry");
-        assert_eq!(
-            std::fs::read_dir(&quarantine_dir).unwrap().count(),
-            0,
-            "failed put left a partial quarantine slot"
-        );
+        assert_eq!(std::fs::read_dir(&quarantine_dir).unwrap().count(), 0, "failed put left a partial quarantine slot");
 
         // Leave the temporary test tree tidy; this only removes the symlink.
         std::fs::remove_file(&shell).unwrap();
