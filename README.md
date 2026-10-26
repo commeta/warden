@@ -2,7 +2,7 @@
 
 # 🛡️ Warden
 
-[![build](https://github.com/commeta/warden/actions/workflows/build.yml/badge.svg)](https://github.com/commeta/warden/actions/workflows/build.yml)
+[![build](https://github.com/commeta/warden/actions/workflows/ci.yml/badge.svg)](https://github.com/commeta/warden/actions/workflows/ci.yml)
 
 **Демон-страж для Linux-серверов и рабочих станций — полностью на Rust.**
 
