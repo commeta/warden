@@ -227,7 +227,7 @@ jobs:
           dpkg-deb -f target/debian/*.deb Depends | tee /dev/stderr | grep -q 'libc6 (>= 2.3[45])'
           sudo apt-get install -y ./target/debian/*.deb
           # A fresh install observes only, and does not come back by itself after a reboot.
-          grep -q '^dry_run = true' /etc/warden/warden.toml
+          sudo grep -q '^dry_run = true' /etc/warden/warden.toml
           ! systemctl is-enabled --quiet wardend
           sudo systemctl start wardend && sleep 15 && systemctl is-active wardend
           sudo wardenctl status | grep -qi "dry"
