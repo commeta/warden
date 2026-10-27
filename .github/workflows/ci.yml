@@ -5,6 +5,20 @@ on:
     branches: [main, master]
   pull_request:
   workflow_dispatch:
+    inputs:
+      fuzz_only:
+        description: "Run only native fuzzing and skip the other CI jobs"
+        type: boolean
+        required: false
+        default: false
+      fuzz_target:
+        description: "Fuzz target to run in fuzz-only mode"
+        type: choice
+        required: false
+        default: procfs
+        options:
+          - procfs
+          - all
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -19,6 +33,7 @@ env:
 
 jobs:
   test:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
     name: test & lint (Rust 1.99.1)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -39,6 +54,7 @@ jobs:
   # Known-vulnerable dependencies and unused ones fail the build: both used to
   # surface only in a manual review.
   dependencies:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
     name: dependencies (audit, unused)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -55,6 +71,7 @@ jobs:
   # Install and run the real systemd unit. The active webshell check is opt-in
   # until its realtime FIM event path is reliable on hosted runners.
   service:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
     name: systemd service smoke test
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -98,6 +115,7 @@ jobs:
           sudo journalctl -u wardend -n 200 --no-pager || true
 
   coverage:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
     name: coverage (llvm-cov)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -178,7 +196,7 @@ jobs:
   # warden-fuzz crate tests still run in the serial workspace test job.
   fuzz:
     name: fuzz smoke (cargo-fuzz; opt-in)
-    if: vars.ENABLE_FUZZ_CI == 'true'
+    if: ${{ vars.ENABLE_FUZZ_CI == 'true' || (github.event_name == 'workflow_dispatch' && inputs.fuzz_only == true) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -190,23 +208,38 @@ jobs:
         with:
           workspaces: fuzz
       - run: cargo install cargo-fuzz --locked
-      - name: Every target for 60 s
+      - name: Run selected target(s) for 60 s
         working-directory: fuzz
+        env:
+          FUZZ_ONLY: ${{ inputs.fuzz_only }}
+          FUZZ_TARGET: ${{ inputs.fuzz_target }}
         run: |
-          for t in $(cargo fuzz list); do
+          targets="$(cargo fuzz list)"
+          if [[ "$FUZZ_ONLY" == "true" && "$FUZZ_TARGET" != "all" ]]; then
+            targets="$FUZZ_TARGET"
+          fi
+          : > fuzz-run.log
+          for t in $targets; do
             echo "::group::$t"
-            cargo fuzz run "$t" -- -max_total_time=60 -max_len=8192 -rss_limit_mb=1024 -timeout=10
+            set +e
+            cargo fuzz run "$t" -- -max_total_time=60 -max_len=8192 -rss_limit_mb=1024 -timeout=10 2>&1 | tee -a fuzz-run.log
+            status=${PIPESTATUS[0]}
+            set -e
             echo "::endgroup::"
+            if [ "$status" -ne 0 ]; then exit "$status"; fi
           done
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: fuzz-artifacts
-          path: fuzz/artifacts
+          path: |
+            fuzz/artifacts
+            fuzz/fuzz-run.log
 
   # Release packages are linked on Ubuntu 22.04 (glibc 2.35) and checked before
   # installation on the supported Debian/Ubuntu releases.
   package:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
     name: build .deb (on Ubuntu 22.04)
     runs-on: ubuntu-22.04
     timeout-minutes: 45
@@ -243,6 +276,7 @@ jobs:
 
   # Install the built package on each supported distribution in a clean container.
   install:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
     name: install on ${{ matrix.image }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
