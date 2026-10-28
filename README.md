@@ -12,7 +12,7 @@ persistence — with guarded, configurable automatic remediation.
 
 [Architecture](docs/architecture.md) · [Detectors & events](docs/detectors.md) · [Security notes](docs/security.md) · [Reference config](config/warden.toml)
 
-![status](https://img.shields.io/badge/status-beta-orange) ![rust](https://img.shields.io/badge/rust-1.88%2B-informational) ![platform](https://img.shields.io/badge/platform-Linux%204.20%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+[![build](https://github.com/commeta/warden/actions/workflows/ci.yml/badge.svg)](https://github.com/commeta/warden/actions/workflows/ci.yml) ![status](https://img.shields.io/badge/status-beta-orange) ![rust](https://img.shields.io/badge/rust-1.88%2B-informational) ![platform](https://img.shields.io/badge/platform-Linux%204.20%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 </div>
 
