@@ -14,7 +14,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 BIN="${1:-$ROOT/target/release/wardend}"
 SECS="${2:-25}"
 UNIT="${UNIT:-$ROOT/packaging/systemd/wardend.service}"
-TABLE="warden-seccomp-check"
+TABLE="warden_seccomp_check"
 W=""
 TRACER=""
 
