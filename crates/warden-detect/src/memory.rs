@@ -626,7 +626,7 @@ impl MemoryDetector {
     pub fn evaluate(&mut self, cx: &Cx<'_>, s: MemorySample) {
         let MemorySample { mi, view, psi: p, vm } = s;
         let (warn_bytes, crit_bytes) = effective_thresholds(&self.cfg, view.total);
-        let swap_rate = self.swap_rate.update(cx.now, vm.pswpin + vm.pswpout).unwrap_or(0.0);
+        let swap_rate = self.swap_rate.update(cx.now, vm.pswpin.saturating_add(vm.pswpout)).unwrap_or(0.0);
         let maj_rate = self.maj_rate.update(cx.now, vm.pgmajfault).unwrap_or(0.0);
         let reclaim = self.direct_reclaim.update(cx.now, vm.pgscan_direct).unwrap_or(0.0);
         let f = Facts {
@@ -708,8 +708,9 @@ impl MemoryDetector {
                     "memory pressure critical: PSI full {:.1}%, available {:.1}%",
                     f.psi_full10, f.available_pct
                 );
-                let a = self.cfg.on_critical.clone();
+                let (a, held) = self.process_actions(self.cfg.on_critical.clone(), &f);
                 let (mut ev, victim) = self.pressure_event(cx, "memory.pressure", Severity::Critical, title, a, &f);
+                Self::explain_held(&mut ev, held, &f);
                 self.gate.gate(&mut ev, victim.as_ref(), f.available, cx.now, self.cfg.max_kills_per_episode);
                 cx.emit(ev);
             }
@@ -718,8 +719,9 @@ impl MemoryDetector {
                     "memory pressure elevated: PSI some {:.1}% full {:.1}%, available {:.1}%, swap {:.0}%",
                     f.psi_some10, f.psi_full10, f.available_pct, f.swap_pct
                 );
-                let a = self.cfg.on_warning.clone();
+                let (a, held) = self.process_actions(self.cfg.on_warning.clone(), &f);
                 let (mut ev, victim) = self.pressure_event(cx, "memory.pressure", Severity::Warning, title, a, &f);
+                Self::explain_held(&mut ev, held, &f);
                 self.gate.gate(&mut ev, victim.as_ref(), f.available, cx.now, self.cfg.max_kills_per_episode);
                 cx.emit(ev);
             }
@@ -779,6 +781,45 @@ impl MemoryDetector {
             self.activity.sample();
         } else if !self.activity.is_empty() {
             self.activity.clear();
+        }
+    }
+}
+
+impl MemoryDetector {
+    /// The actions of a pressure level, without the ones that act on a
+    /// process when memory is not actually short (N22 of the 0.14.1
+    /// review): MemAvailable above the warning threshold means the stall
+    /// is paging in from a slow disk or swap, and a kill frees nothing
+    /// that helps. Returns the actions and whether some were held back.
+    fn process_actions(&self, mut a: Vec<warden_core::ActionSpec>, f: &Facts) -> (Vec<warden_core::ActionSpec>, bool) {
+        let short = f.available <= f.warn_bytes;
+        if short || self.cfg.act_on_psi_alone || !a.iter().any(warden_core::ActionSpec::is_containment) {
+            return (a, false);
+        }
+        a.retain(|x| !x.is_containment());
+        (a, true)
+    }
+
+    fn explain_held(ev: &mut Event, held: bool, f: &Facts) {
+        let io = warden_sys::psi::read(warden_sys::psi::Resource::Io).ok().and_then(|p| p.full).map(|l| l.avg10);
+        if let Some(io) = io {
+            ev.details.insert("psi_io_full_avg10".into(), io.into());
+            if io >= f.psi_full10 {
+                ev.details.insert("io_bound".into(), true.into());
+            }
+        }
+        if held {
+            ev.details.insert(
+                "kill_withheld".into(),
+                format!(
+                    "MemAvailable {} is above the warning threshold {}: memory is not short, tasks stall paging in \
+                     from disk or swap{}, and killing a process would not help (memory.act_on_psi_alone = false)",
+                    human_bytes(f.available),
+                    human_bytes(f.warn_bytes),
+                    io.map(|v| format!(" (PSI io full {v:.1}%)")).unwrap_or_default()
+                )
+                .into(),
+            );
         }
     }
 }
@@ -948,6 +989,35 @@ mod tests {
         assert!(d.activity.prev.contains_key(&me));
         d.evaluate(&cx, sample(8, 0.0, 0.0, 0, 0));
         assert!(d.activity.is_empty());
+    }
+
+    /// N22, the 0.14.1 lab: PSI memory full 36.9 % while 69 % of RAM was
+    /// available (the disk was the bottleneck) — Warden killed a compiler
+    /// and freed nothing that helped. PSI alone no longer kills.
+    #[test]
+    fn psi_alone_does_not_kill_when_memory_is_available() {
+        let cfg = warden_core::Config::default();
+        let series = vec![sample(11, 38.0, 37.0, 0, 0); 30]; // 11 of 16 GiB available
+        let ev = run(&cfg, &series);
+        let crit: Vec<&Event> = ev.iter().map(|(_, e)| e).filter(|e| e.severity == Severity::Critical).collect();
+        assert!(!crit.is_empty());
+        for e in &crit {
+            assert!(!e.actions.iter().any(|a| a.is_containment()), "{:?}", e.actions);
+            assert!(e.actions.contains(&warden_core::ActionSpec::Snapshot), "the snapshot stays");
+            assert!(e.details["kill_withheld"].as_str().unwrap().contains("act_on_psi_alone"));
+        }
+        // memory really short, or the operator's choice: nothing is held
+        // back (whether a kill follows depends on an eligible victim on the
+        // machine running the test)
+        let held = |cfg: &warden_core::Config, avail: u64| {
+            run(cfg, &vec![sample(avail, 38.0, 37.0, 0, 0); 30])
+                .iter()
+                .any(|(_, e)| e.severity == Severity::Critical && e.details.contains_key("kill_withheld"))
+        };
+        assert!(!held(&cfg, 0));
+        let mut opt_in = warden_core::Config::default();
+        opt_in.memory.act_on_psi_alone = true;
+        assert!(!held(&opt_in, 11));
     }
 
     #[test]

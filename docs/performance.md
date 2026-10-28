@@ -1,101 +1,104 @@
-# Производительность: сколько стоит каждый модуль
+# Performance: what each module costs
 
-Warden рассчитан на работу на самом маленьком VPS рядом с нагрузкой, которую он охраняет.
-Эта страница фиксирует, сколько каждый модуль стоит в CPU, I/O и памяти, как это
-измерялось и как измерить это на своём хосте.
+Warden is meant to run on the smallest VPS next to the workload it guards.
+This page records what every module costs in CPU, I/O and memory, how that
+was measured, and how to measure it on your own host.
 
-## Результаты: 0.11.0 → 0.12.0
+## Results: 0.11.0 → 0.12.0
 
-Тот же стенд и методика, что ниже. Для изменившихся строк 0.11.0 была перезапущена
-на том же стенде в тот же день (`bench/results/0.12.0/ab-0.11.0`); полная
-матрица 0.12 — в `bench/results/0.12.0`
+Same VM and method as below. For the rows that changed, 0.11.0 was re-run
+on the same stand the same day (`bench/results/0.12.0/ab-0.11.0`); the full
+0.12 matrix is in `bench/results/0.12.0`
 (`python3 bench/compare.py bench/results/0.12.0/ab-0.11.0 bench/results/0.12.0`).
-Каждый модуль, не указанный в таблице, — в пределах шума 0.11.
+Every module not listed is within noise of 0.11.
 
-| модуль | CPU при старте, с | CPU в установившемся режиме, % ядра | пробуждений/с | прочитано, MiB |
+| module | CPU at start, s | CPU steady, % of a core | wake-ups/s | read, MiB |
 |---|---:|---:|---:|---:|
-| `process` (300 простаивающих процессов, 20 exec/с) | 0.27 → **0.18** | 0.51 → **0.26** | 56.1 → **40.6** | 44.5 → **19.7** |
-| `exec_storm` (300 exec/с от одного родителя) | 1.26 → **0.78** | 3.08 → **1.77** | 534.7 → **379.4** | 317.9 → **110.2** |
+| `process` (300 idle processes, 20 exec/s) | 0.27 → **0.18** | 0.51 → **0.26** | 56.1 → **40.6** | 44.5 → **19.7** |
+| `exec_storm` (300 exec/s from one parent) | 1.26 → **0.78** | 3.08 → **1.77** | 534.7 → **379.4** | 317.9 → **110.2** |
 | `integrity` ¹ | 0.03 → 0.01 | 0.00 → 3.62 | 0.3 → 1.0 | 0.7 → 0.8 |
 | `all` ¹ | 2.99 → 2.85 | 1.04 → 3.38 | 92.1 → **75.3** | 741.7 → **653.7** |
 
-¹ Первый обход SUID (5.7 с CPU, см. ниже) попадает в окно замера в 0.12 и вне его в 0.11. Без него живые
-потоки `all` дают в сумме 1.01% ядра (0.11: 1.03%): при 20 exec/с
-exec-сенсор экономит 0.1% (0.385% → 0.278%), а FIM, не изменившийся, доминирует.
-Пик памяти cgroup этих двух строк: 13 → 779 МиБ и 114 → 874 МиБ, всё
-это освобождаемый кеш каталогов обхода и slab dentry/inode.
+¹ The first SUID walk (5.7 s of CPU, see below) falls inside the
+measurement window in 0.12 and outside it in 0.11. Without it, the live
+threads of `all` add up to 1.01% of a core (0.11: 1.03%): at 20 exec/s the
+exec sensor saves 0.1% (0.385% → 0.278%) and FIM, unchanged, dominates.
+Memory cgroup peak of these two rows: 13 → 779 MiB and 114 → 874 MiB, all
+of it the walk's reclaimable directory cache and dentry/inode slab.
 
-По потокам:
+Per thread:
 
-| сценарий, поток | CPU, с | read/write вызовов/с | прочитано, MiB |
+| scenario, thread | CPU, s | read/write calls/s | read, MiB |
 |---|---:|---:|---:|
-| `process`, `w-proc_connector` (exec-события) | 0.43 → **0.22** | 265 → **42** | 34.7 → **12.1** |
-| `process`, `w-sched-slow` (периодический скан) | 0.06 → **0.05** | 90 → **23** | 9.8 → **7.5** |
+| `process`, `w-proc_connector` (exec events) | 0.43 → **0.22** | 265 → **42** | 34.7 → **12.1** |
+| `process`, `w-sched-slow` (periodic scan) | 0.06 → **0.05** | 90 → **23** | 9.8 → **7.5** |
 | `exec_storm`, `w-proc_connector` | 2.75 → **1.60** | 2615 → **480** | 317.2 → **109.8** |
 
-На один `exec`, через [`bench/exec_syscalls.py`](../bench/exec_syscalls.py)
-(1 800 exec'ов при ~390/с: `sleep 0.3` и `sh -c "sleep 0.3; :"` от одного
-родителя, от root; CPU потока сенсора без трассировки, системные вызовы —
-`strace -c` во втором прогоне):
+Per `exec`, with [`bench/exec_syscalls.py`](../bench/exec_syscalls.py)
+(1 800 execs at ~390/s: `sleep 0.3` and `sh -c "sleep 0.3; :"` from one
+parent, as root; CPU of the sensor thread without tracing, system calls with
+`strace -c` in a second burst):
 
-| | CPU на exec | системных вызовов на exec | открытий `/proc` на exec |
+| | CPU per exec | system calls per exec | `/proc` opens per exec |
 |---|---:|---:|---:|
-| 0.11.0 | 183 мкс | 36.5 | 6.3 |
-| 0.12.0, `exec_fast_path = false` (кеш родителя, фильтр ядра, `recvmmsg`, один `read` на файл) | 150 мкс | 24.1 | 5.3 |
-| **0.12.0** (по умолчанию) | **94 мкс** | **13.5** | **2.2** |
+| 0.11.0 | 183 µs | 36.5 | 6.3 |
+| 0.12.0, `exec_fast_path = false` (parent cache, kernel filter, `recvmmsg`, one `read` per file) | 150 µs | 24.1 | 5.3 |
+| **0.12.0** (default) | **94 µs** | **13.5** | **2.2** |
 
-Дети здесь живут достаточно долго, чтобы быть проанализированными; «~68 системных вызовов»,
-процитированные для 0.11 ниже, получены на нагрузке из короткоживущих процессов и считались
-иначе, так что сравнивайте строки только одной таблицы. На вызов, без ядерной стороны
-(`cargo run --release -p warden-detect --example execbench`):
-полный анализ ~31 мкс, быстрый путь ~9 мкс. Самый дорогой оставшийся элемент —
-чтение чужого `environ` (~15 мкс) для проверки LD_PRELOAD у root-процессов, поэтому
-быстрый путь его семплирует; сборочные пользователи не-root его не платят вовсе.
+The children here live long enough to be analysed; the ~68 system calls
+quoted for 0.11 below came from a load of short-lived processes and counted
+differently, so compare rows of the same table only. Per call, without the
+kernel side (`cargo run --release -p warden-detect --example execbench`):
+full analysis ~31 µs, fast path ~9 µs. The biggest single cost left is
+reading another process's `environ` (~15 µs) for the LD_PRELOAD check of
+root processes, which is why the fast path samples it; non-root build users
+never pay it.
 
-Что изменилось:
+What changed:
 
-* **Exec-сенсор** — кеш родителя, быстрый путь для повторяющихся безобидных
-  сочетаний, фильтрация fork-событий в ядре (6.6+), `recvmmsg`,
-  файлы `/proc` читаются одним `read`. См. [detectors.md](detectors.md#how-exec-events-are-analysed),
-  что ещё проверяет быстрый путь.
-* **Периодический скан процессов** — при работающем коннекторе таблица строится
-  из одного `stat`; имена пользователей, списки дескрипторов и `status` читаются только
-  для тех процессов, которым они нужны правилу.
-* **Обход SUID** — заменён метками файловой системы fanotify (поток
-  `w-suid_realtime`: 0.0 с CPU, 0.6 пробуждений/с на этой ВМ). Обход
-  теперь выполняется на +2 мин только без свежего baseline (первый старт, апгрейд
-  с 0.11), а затем раз в 7 дней, вместо ~5 минут после каждого старта и
-  каждых 6 часов. Один обход корней по умолчанию на этой ВМ: **5.7 с CPU,
-  286 МиБ чтения, ~780 МиБ в cgroup** (282 МиБ page cache
-  каталогов, 495 МиБ slab dentry/inode — освобождаемые, но именно их
-  показывает `systemctl status`). Поэтому строка `integrity` выглядит хуже в
-  0.12: 200-секундный сценарий теперь содержит первый обход (+120 с), тогда как 0.11
-  до него доходил лишь на втором тике (+300 с), уже после конца замера.
-  В сутки: 0.11 ≥ 4 обхода, 0.12 — один в неделю.
-* **systemd** — нет процесса `systemctl` каждые 30 с, пока жива подписка
-  D-Bus; упавший юнит сообщается через ~40 мс после сигнала systemd, а не до
-  30 с позже (замер в `crates/warden-detect/tests/systemd_dbus.rs`, включая
-  цикл фейкового сервиса в 20 мс и вызов `journalctl` за хвостом лога; на этой
-  ВМ нет systemd, поэтому строка `systemd` этого не показывает — поток D-Bus
-  там даже не создаётся).
-* **Отчёт о заполнении диска** — ничего не стоит, пока очистка не упадёт; затем
-  один ограниченный обход на точку монтирования в сутки с idle-приоритетом I/O, с 0.13.1
-  с пейсингом ([ниже](#фоновые-сканы-и-давление-io); `wardenctl du /usr`:
-  155 000 записей за 3.8 с на этой ВМ).
+* **Exec sensor** — parent cache, the fast path for repeated benign
+  combinations, kernel-side filtering of fork events (6.6+), `recvmmsg`,
+  single-`read` `/proc` files. See [detectors.md](detectors.md#how-exec-events-are-analysed)
+  for what the fast path still checks.
+* **Periodic process scan** — with the connector running, the table comes
+  from `stat` only; user names, descriptor lists and `status` are read only
+  for the processes a rule needs.
+* **SUID walk** — replaced by fanotify filesystem marks (the
+  `w-suid_realtime` thread: 0.0 s CPU, 0.6 wake-ups/s on this VM). The walk
+  now runs at +2 min only without a fresh baseline (first start, upgrade
+  from 0.11) and then every 7 days, instead of ~5 min after every start and
+  every 6 hours. One walk of the default roots on this VM: **5.7 s CPU,
+  286 MiB read, ~780 MiB charged to the cgroup** (282 MiB page cache of
+  directories, 495 MiB dentry/inode slab — reclaimable, but it is what
+  `systemctl status` shows). That is why the `integrity` row looks worse in
+  0.12: the 200 s scenario now contains the first walk (+120 s), while 0.11
+  only reached it at its second tick (+300 s), after the measurement ended.
+  Per day: 0.11 ≥ 4 walks, 0.12 one per week.
+* **systemd** — no `systemctl` process every 30 s while the D-Bus
+  subscription is up; a failed unit is reported ~40 ms after systemd's
+  signal instead of up to 30 s later (measured by
+  `crates/warden-detect/tests/systemd_dbus.rs`, including the fake
+  service's 20 ms loop and the `journalctl` call for the log tail; the VM
+  has no systemd, so the `systemd` row cannot show it — the D-Bus thread
+  is not even created there).
+* **Disk usage report** — costs nothing until a cleanup fails; then one
+  bounded walk per mount per day at idle I/O priority, paced since 0.13.1
+  ([below](#background-scans-and-io-pressure); `wardenctl du /usr`:
+  155 000 entries in 3.8 s on this VM).
 
-## Результаты: 0.10.0 → 0.11.0
+## Results: 0.10.0 → 0.11.0
 
-Замерено с [`bench/profile.py`](../bench/profile.py) на ВМ 2 vCPU / 8 ГиБ
-(ядро 6.18). Каждая строка — демон с **включённым только этим модулем**
-(строка `all`: производственные дефолты со всей нагрузкой сразу);
-нагрузки перечислены [ниже](#лабораторная-матрица-benchprofilepy). «При старте» — CPU,
-потраченный в первые 40 с (первые сканы, baseline); «установившийся» — темп после
-этого; столбец cgroup — это то, что `systemctl status` назвал бы
-*Memory:* (anon + page cache + kernel). Сырые данные этих двух релизов
-лежат в тегах `v0.10.0` и `v0.11.0` (`bench/results/`); любые два каталога результатов
-сравниваются через `python3 bench/compare.py <old> <new>`.
+Measured with [`bench/profile.py`](../bench/profile.py) on a 2-vCPU / 8 GiB
+VM (kernel 6.18). Every row runs the daemon with **only that module
+enabled** (the `all` row: production defaults with every load at once);
+loads are listed [below](#the-lab-matrix-benchprofilepy). "At start" is CPU
+spent in the first 40 s (first scans, baselines); "steady" is the rate
+afterwards; the cgroup column is what `systemctl status` would call
+*Memory:* (anon + page cache + kernel). The raw data of these two releases
+lives in the `v0.10.0` and `v0.11.0` tags (`bench/results/`); any two result
+directories are compared with `python3 bench/compare.py <old> <new>`.
 
-| модуль | CPU при старте, с | CPU в установившемся, % ядра | пробуждений/с | RSS, МиБ | пик RSS, МиБ | потоков | пик cgroup, МиБ | прочитано, МиБ |
+| module | CPU at start, s | CPU steady, % of a core | wake-ups/s | RSS, MiB | peak RSS, MiB | threads | memory cgroup peak, MiB | read, MiB |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `idle` | 0.14 → **0.01** | 0.04 → **0.00** | 8.5 → **0.3** | 46.5 → **9.4** | 50.6 → **9.4** | 16 → **5** | 47 → **10** | 0.0 → **0.0** |
 | `memory` | 0.14 → **0.00** | 0.04 → **0.04** | 8.6 → **1.1** | 46.7 → **9.6** | 50.8 → **9.6** | 16 → **6** | 47 → **11** | 0.3 → **0.3** |
@@ -118,81 +121,81 @@ exec-сенсор экономит 0.1% (0.385% → 0.278%), а FIM, не изм
 | `tuning` | 0.14 → **0.00** | 0.04 → **0.00** | 8.6 → **0.3** | 46.6 → **9.5** | 50.8 → **9.5** | 16 → **6** | 47 → **10** | 0.0 → **0.0** |
 | `all` | 12.01 → **2.99** | 100.67 → **1.04** | 420.2 → **92.1** | 664.9 → **33.7** | 664.9 → **36.6** | 16 → **15** | 1376 → **114** | 753.0 → **741.7** |
 
-В 0.10 строки FIM упираются в длительность прогона: первый baseline всё
-ещё выполнялся, когда замер закончился (сценарий `fim` идёт 240 с,
-`all` — 300 с); «установившийся» 100% означает, что одно ядро было занято весь прогон.
+In 0.10 the FIM rows are capped by the run length: the first baseline was
+still running when the measurement ended (the `fim` scenario runs 240 s,
+`all` 300 s); "steady" 100% means one core busy for the whole run.
 
-Что говорят цифры:
+What the numbers say:
 
-* **Выключенный модуль теперь не стоит ничего.** При всём выключенном 0.10
-  крутил 16 потоков, просыпался 8.5 раза в секунду и держал 46.5 МиБ — 38 МиБ из
-  них были скомпилированные сигнатуры FIM (дважды) даже при `fim.enabled = false`. 0.11
-  крутит 5 потоков (main, быстрый планировщик, responder, notifier, один поток
-  blocking-pool), просыпается 0.3 раза в секунду и держит 9.4 МиБ. Каждая строка
-  отдельного модуля теперь «idle + этот модуль».
-* **FIM был узким местом на два порядка.** На сайте в 590 МиБ
-  0.10 не завершил свой первый baseline и за 240 с CPU (набор Unicode-сигнатур
-  поверх lossy UTF-8-копии работал ниже 3 МиБ/с), держал содержимое
-  каждого файла до конца обхода (641 МиБ RSS) и оставил 673 МиБ page
-  cache, записанных на cgroup Warden. 0.11 строит baseline за ~2.6 с
-  CPU (~230 МиБ/с), при 21 МиБ RSS, и вытесняет кеш, который привлёк: cgroup
-  на пике 99 МиБ вместо 1.35 ГиБ.
-* **Шум fanotify заглушён в ядре.** 300 записей/с вне сайта
-  (та же точка монтирования) стоили 307 пробуждений/с в 0.10; занятые каталоги вне
-  сайтов теперь игнорируются через `FAN_MARK_IGNORE` (5 пробуждений/с).
-* **Exec-сенсор — оставшаяся постоянная стоимость** — он читает `/proc` на
-  каждый `exec` на хосте. См. цифры по exec ниже.
+* **A disabled module now costs nothing.** With everything disabled 0.10
+  ran 16 threads, woke up 8.5 times a second and held 46.5 MiB — 38 MiB of
+  it FIM signatures compiled (twice) even with `fim.enabled = false`. 0.11
+  runs 5 threads (main, fast scheduler, responder, notifier, one blocking-pool
+  thread), wakes 0.3 times a second and holds 9.4 MiB. Every single-module row
+  is now "idle + that module".
+* **FIM was the bottleneck by two orders of magnitude.** On a 590 MiB site
+  0.10 did not finish its first baseline in 240 s of CPU (the Unicode
+  signature set over a lossy UTF-8 copy ran below 3 MiB/s), held the content
+  of every file until the walk ended (641 MiB RSS) and left 673 MiB of page
+  cache charged to Warden's cgroup. 0.11 builds the baseline in ~2.6 s of
+  CPU (~230 MiB/s), at 21 MiB RSS, and evicts the cache it pulled in: the
+  cgroup peaks at 99 MiB instead of 1.35 GiB.
+* **fanotify noise is muted in the kernel.** 300 writes/s outside the site
+  (same mount) cost 307 wake-ups/s in 0.10; busy directories outside the
+  sites are now ignored with `FAN_MARK_IGNORE` (5 wake-ups/s).
+* **The exec sensor is the remaining steady cost** — it reads `/proc` for
+  every `exec` on the host. See the per-exec figures below.
 
-### По потокам при всё включённом (`all`, 300 с)
+### Per thread, everything enabled (`all`, 300 s)
 
-| поток | CPU 0.10, с | CPU 0.11, с | пробуждений/с 0.10 → 0.11 | syscalls/с 0.10 → 0.11 |
+| thread | 0.10 CPU, s | 0.11 CPU, s | 0.10 → 0.11 wake-ups/s | 0.10 → 0.11 syscalls/s |
 |---|---:|---:|---:|---:|
-| `w-fim` (воркер: baseline, сигнатуры) | 268.20 (не завершён) | **3.43** | 21.9 → 8.8 | 0 → 15 |
-| `w-proc_connector` (exec-события) | 1.73 | **1.15** | 60.4 → 59.8 | 1119 → **274** |
+| `w-fim` (worker: baseline, signatures) | 268.20 (unfinished) | **3.43** | 21.9 → 8.8 | 0 → 15 |
+| `w-proc_connector` (exec events) | 1.73 | **1.15** | 60.4 → 59.8 | 1119 → **274** |
 | `w-fim_realtime` (fanotify) | 1.70 | **0.28** | 307.8 → **5.2** | 430 → 45 |
 | `w-sched-slow` (disk, process, integrity, systemd, tuning) | 0.22 | 0.20 | 1.4 → 0.2 | 344 → 97 |
 | `w-waf`, `w-access_log`, `w-auth`, `w-kmsg` | 0.27 | 0.19 | 8.7 → 7.3 | 16 → 11 |
 | `w-sched-fast` (memory … stall) | 0.04 | 0.05 | 1.4 → 1.4 | 17 → 8 |
-| main / `w-async` ×2 (движок, управление, метрики) | 0.17 | 0.29 | 9.4 → 5.8 | 11 → 20 |
+| main / `w-async` ×2 (engine, control, metrics) | 0.17 | 0.29 | 9.4 → 5.8 | 11 → 20 |
 | `w-notify`, `w-respond`, `w-psi_trigger`, `w-sched-health` | 0.03 | 0.04 | 9.0 → 1.8 | 32 → 0 |
 
-### Exec-события (0.11)
+### Exec events (0.11)
 
-Каждый `exec` на хосте анализируется: `stat`, `status`,
-`cmdline`, `cgroup`, `exe` процесса, `status` родителя (и, только когда это нужно
-правилу, `exe`/`cgroup` родителя), и `environ` root-процессов
-(проверка LD_PRELOAD). С `strace -c` на потоке сенсора:
+Every `exec` on the host is analysed: the process's `stat`, `status`,
+`cmdline`, `cgroup`, `exe`, the parent's `status` (and, only when a rule
+needs it, the parent's `exe`/`cgroup`), and `environ` of root processes
+(LD_PRELOAD check). With `strace -c` on the sensor thread:
 
-| | syscalls на exec | CPU на exec |
+| | syscalls per exec | CPU per exec |
 |---|---:|---:|
-| 0.10 | ~134 (`std::fs::read`: `statx` + ~6 растущих чтений на файл `/proc`; `poll` перед каждым `recv`) | ~290 мкс |
-| 0.11 | **~68** (одно чтение блока 8 КиБ + чтение до EOF; сначала `recv(MSG_DONTWAIT)`) | **~195 мкс** |
+| 0.10 | ~134 (`std::fs::read`: `statx` + ~6 growing reads per `/proc` file; `poll` before every `recv`) | ~290 µs |
+| 0.11 | **~68** (one 8 KiB block read + EOF read; `recv(MSG_DONTWAIT)` first) | **~195 µs** |
 
-При 20 `exec`/с это 0.4% ядра. Сборочный/CI-сервер с тысячами
-`exec`/с платит пропорционально; там `process.proc_connector = false`
-оставляет периодический скан (каждые `scan_interval`) и убирает стоимость на exec.
+At 20 `exec`/s that is 0.4% of a core. A CI/build server running thousands
+of `exec`/s pays proportionally; there `process.proc_connector = false`
+keeps the periodic scan (every `scan_interval`) and drops the per-exec cost.
 
-### Движок сигнатур
+### Signature engine
 
-`cargo run --release -p warden-detect --example sigbench -- <tree>` на
-тестовом сайте в 590 МиБ (39 встроенных правил):
+`cargo run --release -p warden-detect --example sigbench -- <tree>` on the
+590 MiB test site (39 built-in rules):
 
-| движок | пропускная способность |
+| engine | throughput |
 |---|---:|
-| 0.10: Unicode `RegexSet` поверх lossy UTF-8-копии | 1.3 МиБ/с |
-| 39 отдельных байтовых regexes (`is_match` каждого) | 87 МиБ/с |
-| **0.11: один ASCII байтовый `RegexSet`** (+ энтропийные эвристики PHP) | **437 МиБ/с** |
+| 0.10: Unicode `RegexSet` over a lossy UTF-8 copy | 1.3 MiB/s |
+| 39 separate byte regexes (`is_match` each) | 87 MiB/s |
+| **0.11: one ASCII byte `RegexSet`** (+ PHP entropy heuristics) | **437 MiB/s** |
 
-Компиляция набора занимает ~10 мс (и происходит только при включённом FIM).
+Compiling the set takes ~10 ms (and happens only when FIM is enabled).
 
-### Куча при всём выключенном (valgrind DHAT, 30 с)
+### Heap with everything disabled (valgrind DHAT, 30 s)
 
-| | выделено всего | живо на пике | блоков |
+| | allocated in total | live at peak | blocks |
 |---|---:|---:|---:|
-| 0.10 | 282 МБ | 44.5 МБ (38.5 МБ — сигнатуры FIM) | 1 381 398 |
-| 0.11 | **1.1 МБ** | **0.26 МБ** | 10 190 |
+| 0.10 | 282 MB | 44.5 MB (38.5 MB of it FIM signatures) | 1 381 398 |
+| 0.11 | **1.1 MB** | **0.26 MB** | 10 190 |
 
-### Что показывает `wardenctl profile` под полной нагрузкой
+### What `wardenctl profile` shows under the full load
 
 ```
 Warden 0.11.0 — self profile over 20.0s (uptime 169s)
@@ -220,105 +223,105 @@ proc_connector     401.6KiB   436.8KiB     118.9MiB    702.2KiB/s
 …
 ```
 
-## Фоновые сканы и давление I/O
+## Background scans and I/O pressure
 
-Три скана читают много метаданных за один проход: обход диска (когда диск
-критичен и очистка не помогла), обход SUID/SGID (полный при каждом
-`suid_rescan`) и плановый скан FIM каждого сайта. С 0.13.1
-они уступают нагрузке (`[daemon.pacing]`, включено по умолчанию):
+Three scans read a lot of metadata in one go: the disk-usage walk (when a
+disk is critical and cleanup did not help), the SUID/SGID walk (a full one
+per `suid_rescan`) and the scheduled FIM rescan of each site. Since 0.13.1
+they yield to the workload (`[daemon.pacing]`, on by default):
 
-* **Что измеряется.** PSI `some` для I/O — доля времени, когда хотя бы одна
-  задача ждала I/O. Собственные ожидания скана — часть этого числа, поэтому
-  давление, которое чувствуют *другие*, измеряется, пока скан паузится (каждый
-  простой в паузе принадлежит кому-то другому). Пока скан работает, общий
-  простой системы минус простой собственной cgroup Warden — нижняя граница
-  простоя других; когда даже граница превышает цель, скан отступает
-  сразу.
-* **Скважность.** Скан работает квантами по 200 мс и паузит после каждого, так что
-  работа / (работа + пауза) — его скважность. Выше `io_pressure` (10%) скважность
-  уменьшается вдвое, до нижнего предела, так что каждый скан завершается: ¼ для обхода диска (не более
-  4× медленнее; его `usage_report_max_time` считает рабочее время, с жёстким
-  потолком 4× по часам), ⅒ для обхода SUID (никто его не ждёт), ½ для
-  FIM (его воркер обрабатывает записи в реальном времени только между сканами). Ниже половины
-  цели скважность восстанавливается. На полной скорости пауза-проба 50 мс на каждые 2 с
-  работы (2.5%) держит замер свежим.
-* **Класс I/O.** Пока скважность снижена или давление заметно,
-  поток скана в idle-классе; на тихом диске — в
-  best-effort level 7, так что случайная запись тихого хоста не застопорит
-  скан на секунды (mq-deadline позволяет idle-запросам ждать до
-  `prio_aging_expire`, 10 с). `io_class = "idle"` держит idle-класс
-  всё время. `bfq` и `mq-deadline` уважают классы; `none` и `kyber`
-  — дефолт для NVMe — их игнорируют, и там именно скважность
-  защищает нагрузку (`wardenctl doctor` показывает планировщик).
-* **Старт.** Плановый повторный скан SUID или FIM, обнаруживший `io some avg10` выше
-  цели, откладывается на 2 минуты, не более чем на `max_defer` (1 ч) подряд;
-  затем всё равно выполняется, с пейсингом. Первый baseline и обход SUID после
-  потерянных событий реального времени не откладываются. Пока FIM ждёт, записи в реальном времени
-  всё равно обрабатываются.
-* **Никогда не пейсится:** `wardenctl du`, `wardenctl fim scan`, действия очистки —
-  их кто-то ждёт.
+* **What is measured.** PSI `some` for I/O — the share of time at least one
+  task waited for I/O. A scan's own waits are part of that number, so the
+  pressure the *others* feel is measured while the scan pauses (every stall
+  in a pause belongs to someone else). While the scan works, the system-wide
+  stall minus the stall of Warden's own cgroup is a lower bound of the
+  others' stall; when even the bound exceeds the target the scan backs off
+  at once.
+* **Duty cycle.** The scan works in 200 ms quanta and pauses after each so
+  that work / (work + pause) is its duty. Above `io_pressure` (10 %) the duty
+  halves, down to a floor, so every scan finishes: ¼ for the disk walk (at
+  most 4× slower; its `usage_report_max_time` counts working time, with a
+  hard 4× wall-clock cap), ⅒ for the SUID walk (nothing waits for it), ½ for
+  FIM (its worker processes real-time writes only between scans). Below half
+  the target the duty grows back. At full speed a 50 ms probe pause per 2 s
+  of work (2.5 %) keeps the measurement fresh.
+* **I/O class.** While the duty is reduced or the pressure is noticeable,
+  the scanning thread is in the idle class; on a quiet disk it is in
+  best-effort level 7, so that the occasional write of a quiet host does not
+  stall a scan for seconds (mq-deadline lets idle requests wait up to
+  `prio_aging_expire`, 10 s). `io_class = "idle"` keeps the idle class
+  throughout. `bfq` and `mq-deadline` honour the classes; `none` and `kyber`
+  — the default for NVMe — ignore them, and there the duty cycle is what
+  protects the workload (`wardenctl doctor` shows the scheduler).
+* **Start.** A scheduled SUID or FIM rescan that finds `io some avg10` above
+  the target is postponed by 2 minutes, for at most `max_defer` (1 h) in a
+  row; then it runs anyway, paced. The first baseline and a SUID walk after
+  lost real-time events are not postponed. While FIM waits, real-time writes
+  are still processed.
+* **Never paced:** `wardenctl du`, `wardenctl fim scan`, cleanup actions —
+  someone is waiting for them.
 
-Что он делает, видно в `wardenctl status` (строка `Pacing:`), в
-метриках `warden_pacing_*` на скан (скважность, время на паузах, отложенные старты,
-давление других), в `paced_seconds` у `disk.usage_report` и результатов скана
-FIM, и в лог-строках `postponed`.
+What it does is visible in `wardenctl status` (`Pacing:` line), in
+`warden_pacing_*` metrics per scan (duty, time paused, postponed starts, the
+others' pressure), in `paced_seconds` of `disk.usage_report` and of FIM scan
+results, and in the `postponed` log lines.
 
-**Лабораторная проверка** (ВМ 2 vCPU, virtio-диск, `du` по `/usr`: 159 000 записей,
-кеши сброшены перед каждым прогоном — кеш хоста всё равно отдаёт большую часть,
-самый первый холодный обход занял 5.0 с; «нагрузка» — WAL-подобный цикл из
-записей по 16 КиБ + `fdatasync`; каждая строка прогнана 3 раза):
+**Lab check** (2-vCPU VM, virtio disk, `du` of `/usr`: 159 000 entries,
+caches dropped before each run — the host's cache still serves most of it,
+the very first cold walk took 5.0 s; the "workload" is a WAL-like loop of
+16 KiB writes + `fdatasync`; every row run 3 times):
 
-| | обход | на паузах | скважность в конце |
+| | walk | paused | duty at the end |
 |---|---|---|---|
-| тихий диск, без пейсинга | 1.3–1.4 с | — | — |
-| тихий диск, с пейсингом | 1.3–1.4 с | 0.1 с (пробы) | 1.0 |
-| WAL-нагрузка, без пейсинга | 2.2–2.3 с | — | — |
-| WAL-нагрузка, с пейсингом | 8.5–8.6 с | 6.3 с | 0.25 (давление других ≈ 48%) |
+| quiet disk, unpaced | 1.3–1.4 s | — | — |
+| quiet disk, paced | 1.3–1.4 s | 0.1 s (the probes) | 1.0 |
+| WAL workload, unpaced | 2.2–2.3 s | — | — |
+| WAL workload, paced | 8.5–8.6 s | 6.3 s | 0.25 (others' pressure ≈ 48 %) |
 
-На тихом диске пейсинг не стоит измеримо ничего. Под WAL-нагрузкой обход
-опускается на свой минимум и идёт в 3.7× дольше. На этой ВМ обход не измеримо
-замедлял нагрузку ни в одном из режимов (его пропускная способность менялась на ±30%
-между прогонами сама по себе; page cache хоста отдаёт большинство чтений метаданных), так что
-лаборатория показывает механизм, а не выгоду: для неё нужен диск, за который скан
-реально конкурирует (вращающийся диск, сетевое блочное хранилище, насыщенный
-SSD). Учтите компромисс: PSI говорит, что кто-то ждёт, но не кто причина —
-нагрузка, которая постоянно ждёт на `fsync`, держит сканы на их минимуме, даже когда
-они не причина. Это сознательно: Warden предполагает, что может быть он.
+On a quiet disk pacing costs nothing measurable. Under the WAL workload the
+walk drops to its floor and takes 3.7× longer. On this VM the walk did not
+measurably slow the workload either way (its throughput varied by ±30 %
+between runs on its own; the host page cache serves most metadata reads), so
+the lab shows the mechanism, not the benefit: that needs a disk the scan
+really competes for (a rotating disk, network block storage, a saturated
+SSD). Note the trade-off: PSI tells that someone waits, not who caused it —
+a workload that always waits on `fsync` keeps scans at their floor even when
+they are not the cause. That is deliberate: Warden assumes it might be.
 
-## Измерение на своём хосте
+## Measuring on your own host
 
-### Живо, из работающего демона
+### Live, from the running daemon
 
 ```
 sudo wardenctl profile -i 10
 ```
 
-Два сэмпла с интервалом в десять секунд:
+Two samples ten seconds apart:
 
-* **Процесс** — RSS с разбивкой на анонимную и файловую память, пик RSS,
-  залоченная память, CPU сейчас и с момента старта (плюс собранные хелперы вроде
+* **Process** — RSS split into anonymous and file-backed memory, peak RSS,
+  locked memory, CPU now and since start (plus reaped helpers such as
   `systemctl`, `journalctl`, `nft`).
-* **Куча** — байты живые и выделенные с момента старта, отнесённые на модуль, который их
-  выделил (tracking allocator; build-feature `alloc-stats`, включён по
-  умолчанию; накладные расходы: 16-байтовый заголовок и несколько атомарных операций на аллокацию).
-* **cgroup** — то, что `systemctl status wardend` показывает как *Memory:*, с разбивкой
-  на anon / page cache / kernel, с закреплённой и освобождаемой суммой.
-  Page cache и освобождаемый slab — **не** собственная память Warden:
-  ядро их вытесняет под давлением (см. ниже).
-* **Потоки** — CPU, пробуждений/с, прочитанные/записанные байты и syscalls по потоку,
-  с модулем, которому служит каждый поток.
-* **Детекторы** — по детектору: тики, CPU, среднее/максимальное время тика и
-  прочитанные байты, замеряемые вокруг каждого тика через `getrusage(RUSAGE_THREAD)` и
-  `/proc/thread-self/io` (детекторы, делящие поток планировщика, разделяются).
-* **Запущенные / выключенные компоненты** — у выключенного модуля нет потока.
+* **Heap** — bytes live and allocated since start, charged to the module that
+  allocated them (tracking allocator; build feature `alloc-stats`, on by
+  default; overhead: a 16-byte header and a few atomic adds per allocation).
+* **cgroup** — what `systemctl status wardend` reports as *Memory:*, split
+  into anon / page cache / kernel, with the pinned vs. reclaimable total.
+  Page cache and reclaimable slab are **not** Warden's own memory: the
+  kernel drops them under pressure (see below).
+* **Threads** — CPU, wake-ups/s, bytes read/written and syscalls per thread,
+  with the module each thread serves.
+* **Detectors** — per detector: ticks, CPU, average/maximum tick time and
+  bytes read, measured around each tick with `getrusage(RUSAGE_THREAD)` and
+  `/proc/thread-self/io` (detectors sharing a scheduler thread are separated).
+* **Running / disabled components** — a disabled module has no thread.
 
-Те же числа экспортируются в Prometheus: `warden_module_cpu_seconds_total`,
+The same numbers are exported to Prometheus: `warden_module_cpu_seconds_total`,
 `warden_module_read_bytes_total`, `warden_module_ticks_total`,
 `warden_module_heap_bytes`, `warden_thread_cpu_seconds_total`,
 `warden_self_rss_bytes{kind}`, `warden_self_cgroup_memory_bytes{kind}`,
 `warden_self_heap_bytes`, `warden_suid_scan_entries`, `warden_suid_scan_seconds`.
 
-### Лабораторная матрица (`bench/profile.py`)
+### The lab matrix (`bench/profile.py`)
 
 ```
 cargo build --release
@@ -328,32 +331,32 @@ sudo python3 bench/exec_syscalls.py --wardend target/release/wardend   # system 
 cargo run --release -p warden-detect --example execbench                # full analysis vs fast path, per call
 ```
 
-Для каждого сценария скрипт пишет конфигурацию, в которой **всё
-выключено, кроме проверяемого модуля**, сбрасывает page cache, запускает
-демон (dry-run) в его собственной memory cgroup, гонит синтетическую нагрузку и
-сэмплирует `/proc/<pid>/task/*/{stat,status,io}`, `/proc/<pid>/status` и
-cgroup каждую секунду. CPU «при старте» — всё до `--warmup` (40 с:
-первые сканы, baseline); «установившийся» — темп после него.
+For each scenario the script writes a configuration in which **everything is
+disabled except the module under test**, drops the page cache, starts the
+daemon (dry-run) inside its own memory cgroup, drives a synthetic load and
+samples `/proc/<pid>/task/*/{stat,status,io}`, `/proc/<pid>/status` and the
+cgroup every second. CPU "startup" is everything up to `--warmup` (40 s:
+first scans, baselines); "steady" is the rate after it.
 
-| сценарий | нагрузка |
+| scenario | load |
 |---|---|
-| `idle` | ничего не включено — ядро демона |
-| `memory`, `cpu`, `io`, `stall`, `limits`, `network`, `hardware` | нет (они читают `/proc` и `/sys`) |
-| `kernel` | 20 сообщений ядра/с, записываемых в `/dev/kmsg` |
-| `disk` | интервал 10 с |
-| `process` | 300 простаивающих процессов + 20 `exec`/с |
-| `exec_storm` | модуль process, 200 spawn'ов/с от одного родителя (`/bin/true` и `sh -c "true; :"`, т.е. 300 `exec`/с) |
-| `integrity` | реальная система; обход SUID через 120 с (200 с прогон) |
-| `systemd` | `systemctl list-units --state=failed` каждые 30 с |
-| `auth` | 10 строк auth.log/с (20% неудачных SSH-логинов) |
-| `fim` | сайт на 20 000 файлов, ~590 МиБ: baseline, 5 записей/с внутри, 300 записей/с вне сайта на той же точке монтирования |
-| `access_log` | тот же сайт, 200 запросов/с в access-log |
-| `waf` | 20 ModSecurity-отказов/с (nginx error log) |
-| `health` | 3 HTTP + 3 TCP-проверки каждые 10 с |
-| `tuning` | детекция нагрузки и советы по sysctl |
-| `all` | производственные дефолты со всей нагрузкой выше сразу |
+| `idle` | nothing enabled — the daemon core |
+| `memory`, `cpu`, `io`, `stall`, `limits`, `network`, `hardware` | none (they read `/proc` and `/sys`) |
+| `kernel` | 20 kernel messages/s written to `/dev/kmsg` |
+| `disk` | 10 s interval |
+| `process` | 300 idle processes + 20 `exec`/s |
+| `exec_storm` | process module, 200 spawns/s from one parent (`/bin/true` and `sh -c "true; :"`, i.e. 300 `exec`/s) |
+| `integrity` | the real system; SUID walk after 120 s (200 s run) |
+| `systemd` | `systemctl list-units --state=failed` every 30 s |
+| `auth` | 10 auth.log lines/s (20% failed SSH logins) |
+| `fim` | a 20 000-file, ~590 MiB site: baseline, 5 writes/s inside, 300 writes/s outside the site on the same mount |
+| `access_log` | the same site, 200 requests/s in the access log |
+| `waf` | 20 ModSecurity denials/s (nginx error log) |
+| `health` | 3 HTTP + 3 TCP checks every 10 s |
+| `tuning` | workload detection and sysctl advice |
+| `all` | production defaults with every load above at once |
 
-Атрибуция кучи одного прогона: сборка с символами и valgrind DHAT:
+Heap attribution of a single run: build with symbols and use valgrind DHAT:
 
 ```
 cargo build --profile profiling -p wardend
@@ -361,23 +364,23 @@ sudo valgrind --tool=dhat --dhat-out-file=dhat.json target/profiling/wardend --c
 python3 bench/dhat_modules.py dhat.json
 ```
 
-## Page cache, slab и «Memory: 2.8G» в `systemctl status`
+## Page cache, slab and "Memory: 2.8G" in `systemctl status`
 
-Ядро пишет страницу файлового кеша на cgroup того, кто первым её прочитал,
-а inode/dentry — на того, кто первым посмотрел на файл. Демон, который
-хеширует файлы, читает контрольные списки dpkg и обходит файловую систему в поисках SUID-
-бинарников, поэтому показывает большой `memory.current`, который почти весь
-**освобождаемый**: это не память Warden, это кеш ядра, освобождаемый
-в момент, когда что-то другое попросит RAM. С 0.11:
+The kernel charges a page of file cache to the cgroup of whoever first read
+it, and an inode/dentry to whoever first looked the file up. A daemon that
+hashes files, reads dpkg's checksum lists and walks the filesystem for SUID
+binaries therefore shows a large `memory.current` that is almost entirely
+**reclaimable**: it is not Warden's memory, it is the kernel's cache, freed
+the moment anything else needs RAM. Since 0.11:
 
-* файлы, прочитанные только для хеширования (FIM, integrity, контрольные суммы dpkg), вытесняются
-  после чтения **если они не были в кеше до этого** (`cachestat(2)`, Linux
-  6.5+; на более старых ядрах ничего не вытесняется — Warden никогда не выкидывает чужие
-  горячие данные);
-* обход SUID пропускает `nosuid`, псевдо-, сетевые и образные файловые системы и
-  `integrity.suid_exclude` (слои контейнеров, хранилища snap/flatpak), и
-  делает `stat` только для обычных файлов;
-* события `memory.pressure` ранжируют `top_cgroups` по памяти, которую cgroup **закрепляет**
-  (anon + shmem + невытесняемая память ядра) и показывают page cache и
-  освобождаемую память отдельно;
-* `wardenctl profile` показывает разбивку для собственной cgroup Warden.
+* files read only to be hashed (FIM, integrity, dpkg checksums) are evicted
+  after reading **if they were not cached before** (`cachestat(2)`, Linux
+  6.5+; on older kernels nothing is evicted — Warden never drops someone
+  else's hot data);
+* the SUID walk skips `nosuid`, pseudo, network and image filesystems and
+  `integrity.suid_exclude` (container layers, snap/flatpak stores), and
+  stats only regular files;
+* `memory.pressure` events rank `top_cgroups` by memory a cgroup **pins**
+  (anon + shmem + unreclaimable kernel memory) and show page cache and
+  reclaimable memory separately;
+* `wardenctl profile` shows the split for Warden's own cgroup.

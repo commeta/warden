@@ -142,6 +142,9 @@ enum Cmd {
         #[arg(long)]
         rules: Vec<String>,
     },
+    /// ModSecurity logs.
+    #[command(subcommand)]
+    Waf(WafCmd),
     /// Offline: validate configuration.
     CheckConfig {
         #[arg(default_value = DEFAULT_CONFIG)]
@@ -159,6 +162,18 @@ enum FimCmd {
     Accept { site: String, path: Option<String> },
     /// Auto-accept unflagged changes for a while (deployments).
     Pause { site: String, duration: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum WafCmd {
+    /// Offline: the ModSecurity logs Apache, nginx and Angie are configured
+    /// to write, per virtual host, as `[[waf.log]]` entries.
+    Discover {
+        /// Configuration whose `process.web_users` decide who counts as a
+        /// web account (for the ownership check of each log).
+        #[arg(short, long, default_value = DEFAULT_CONFIG)]
+        config: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -349,7 +364,7 @@ fn mem_top(limit: usize, sort: &str, interval: Option<Duration>) -> Result<()> {
     Ok(())
 }
 
-fn doctor(config: &std::path::Path) {
+fn doctor(config: &std::path::Path, socket: &std::path::Path) {
     let ok = |b: bool| if b { "\x1b[32m✓\x1b[0m" } else { "\x1b[31m✗\x1b[0m" };
     let warn = "\x1b[33m!\x1b[0m";
     println!("Warden doctor — kernel {}\n", warden_sys::system::kernel_release());
@@ -484,12 +499,132 @@ fn doctor(config: &std::path::Path) {
     if std::path::Path::new("/run/systemd/system").exists() {
         unit_check(ok, warn);
     }
-    let daemon = UnixStream::connect("/run/warden/control.sock").is_ok();
+    waf_doctor(loaded.as_ref(), ok, warn);
+    let sock = loaded.as_ref().map_or_else(|| socket.to_path_buf(), |c| c.daemon.control_socket.clone());
+    let daemon = UnixStream::connect(socket).is_ok() || UnixStream::connect(&sock).is_ok();
     println!(
         " {} wardend control socket reachable{}",
         if daemon { ok(true) } else { warn },
         if daemon { "" } else { " — daemon not running (systemctl status wardend)" }
     );
+}
+
+/// Doctor: the ModSecurity logs of this host, whether Warden follows them,
+/// and whether a web account can write them.
+fn waf_doctor(cfg: Option<&warden_core::Config>, ok: impl Fn(bool) -> &'static str, warn: &str) {
+    let Some(cfg) = cfg else { return };
+    if !cfg.waf.enabled {
+        return;
+    }
+    let d = warden_detect::waf_discover::discover();
+    let web = warden_detect::util::WebPrincipals::load(&cfg.process.web_users);
+    let configured: Vec<&std::path::Path> = cfg.waf.logs.iter().map(|l| l.path.as_path()).collect();
+    if d.found.is_empty() && configured.is_empty() {
+        println!(" {warn} WAF: no ModSecurity log configured or found (wardenctl waf discover)");
+        return;
+    }
+    for f in &d.found {
+        let followed = cfg.waf.discover || configured.contains(&f.path.as_path());
+        let mark = if followed { ok(true) } else { warn };
+        let how = if configured.contains(&f.path.as_path()) {
+            "configured"
+        } else if cfg.waf.discover {
+            "discovered"
+        } else {
+            "NOT followed: add it to [[waf.log]] or set waf.discover = true"
+        };
+        println!(" {mark} WAF {} ({} {}): {how}", f.path.display(), f.server, f.site);
+    }
+    // who can write what the daemon reads: the logs, and the storage of
+    // concurrent logs (there the workers write every entry by design)
+    let mut followed: Vec<(&std::path::Path, Option<&std::path::Path>)> =
+        cfg.waf.logs.iter().map(|l| (l.path.as_path(), l.storage_dir.as_deref())).collect();
+    if cfg.waf.discover {
+        followed.extend(d.found.iter().map(|f| (f.path.as_path(), f.storage_dir.as_deref())));
+    }
+    let mut told = std::collections::HashSet::new();
+    let what = if cfg.waf.trust_writable_logs {
+        "blocks still follow from it (waf.trust_writable_logs = true)"
+    } else {
+        "its events do not block (waf.trust_writable_logs = false)"
+    };
+    for (log, storage) in followed {
+        for p in std::iter::once(log).chain(storage) {
+            if told.insert(p)
+                && let Some(why) = web.can_write(p)
+            {
+                println!(" {warn} WAF log writable by a web user: {why} — a webshell could forge entries; {what}");
+            }
+        }
+    }
+    for n in &d.notes {
+        println!(" {warn} WAF: {n}");
+    }
+}
+
+/// `status`: the ModSecurity logs the daemon follows.
+fn waf_status_text(v: &serde_json::Value) {
+    let sources = v["sources"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let problems = v["problems"].as_array().map(Vec::as_slice).unwrap_or_default();
+    if sources.is_empty() && problems.is_empty() {
+        return;
+    }
+    println!("\nWAF logs:");
+    for s in sources {
+        println!(
+            "  {:<10} {:<20} {}{}{}",
+            s["format"].as_str().unwrap_or("?"),
+            s["site"].as_str().unwrap_or("-"),
+            s["path"].as_str().unwrap_or("?"),
+            s["storage_dir"].as_str().map(|d| format!(" (storage {d})")).unwrap_or_default(),
+            if s["discovered"].as_bool() == Some(true) { "  [discovered]" } else { "" }
+        );
+        if let Some(w) = s["writable_by_web_user"].as_str() {
+            println!("  {:<31} ! writable by a web user: {w}", "");
+        }
+    }
+    for p in problems {
+        println!("  cannot open {}: {}", p["path"].as_str().unwrap_or("?"), p["error"].as_str().unwrap_or("?"));
+    }
+}
+
+/// `wardenctl waf discover` as text: the sources, what to know about them,
+/// and a `[[waf.log]]` snippet.
+fn waf_discover_text(d: &warden_detect::waf_discover::Discovery, web: &warden_detect::util::WebPrincipals) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if d.found.is_empty() {
+        out.push_str("no ModSecurity log found in the Apache, nginx or Angie configuration\n");
+    }
+    for f in &d.found {
+        let fmt = serde_json::to_value(f.format).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+        let _ = writeln!(out, "{:<7} {:<28} {:<11} {}", f.server, f.site, fmt, f.path.display());
+        if let Some(dir) = &f.storage_dir {
+            let _ = writeln!(out, "        storage {}", dir.display());
+        }
+        let _ = writeln!(out, "        from {}", f.origin);
+        for n in &f.notes {
+            let _ = writeln!(out, "        ! {n}");
+        }
+        let paths = std::iter::once(&f.path).chain(f.storage_dir.as_ref());
+        if let Some(why) = paths.filter_map(|p| web.can_write(p)).next() {
+            let _ = writeln!(
+                out,
+                "        ! writable by a web user ({why}): a webshell could forge entries — see waf.trust_writable_logs"
+            );
+        }
+    }
+    for n in &d.notes {
+        let _ = writeln!(out, " ! {n}");
+    }
+    if !d.found.is_empty() {
+        let _ = writeln!(
+            out,
+            "\n# With waf.discover = true (the default) wardend follows these by itself;\n# to pin them, put this into /etc/warden/conf.d/50-waf.toml:\n"
+        );
+        out.push_str(&d.toml());
+    }
+    out
 }
 
 /// Syscalls the daemon needs beyond `@system-service` (see the unit file).
@@ -729,6 +864,7 @@ fn main() -> Result<()> {
                     let d = s.get("detail").and_then(|d| d.as_str()).unwrap_or("");
                     println!("  {k:<16} {st} {d}");
                 }
+                waf_status_text(&v["waf_sources"]);
                 println!("\nFIM sites: {}", v["fim_sites"]);
                 println!("Lineage: {}", v["lineage"]);
                 println!("Max heuristic score: {}", v["heuristics_max_score"]);
@@ -912,7 +1048,7 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Doctor { config } => doctor(&config),
+        Cmd::Doctor { config } => doctor(&config, &cli.socket),
         Cmd::Psi => {
             for r in [
                 warden_sys::psi::Resource::Cpu,
@@ -986,6 +1122,24 @@ fn main() -> Result<()> {
             }
             if !found.is_empty() {
                 std::process::exit(3);
+            }
+        }
+        Cmd::Waf(WafCmd::Discover { config }) => {
+            let d = warden_detect::waf_discover::discover();
+            let web_users = warden_core::load::load(&config)
+                .map(|l| l.config.process.web_users)
+                .unwrap_or_else(|_| warden_core::Config::default().process.web_users);
+            let web = warden_detect::util::WebPrincipals::load(&web_users);
+            if cli.json {
+                let mut v = serde_json::to_value(&d)?;
+                if let Some(found) = v.get_mut("found").and_then(Value::as_array_mut) {
+                    for (f, src) in found.iter_mut().zip(&d.found) {
+                        f["writable_by_web_user"] = serde_json::json!(web.can_write(&src.path));
+                    }
+                }
+                println!("{}", pretty(&v));
+            } else {
+                print!("{}", waf_discover_text(&d, &web));
             }
         }
         Cmd::CheckConfig { path } => match warden_core::load::load(&path) {

@@ -113,7 +113,8 @@ git -C "$SOURCE_DIR" log -1 --format='Commit subject: %s%nCommit date: %cI'
 export RUSTUP_HOME="$RUSTUP_HOME_FOUND"
 export CARGO_HOME="${CACHE_ROOT}/cargo-home"
 export CARGO_TARGET_DIR="$TARGET_DIR"
-export PATH="$(dirname "$CARGO_BIN"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+CARGO_BIN_DIR="$(dirname "$CARGO_BIN")"
+export PATH="${CARGO_BIN_DIR}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 install -d -o root -g root -m 0755 "$CARGO_HOME"
 
 RUSTC_BIN="$(dirname "$CARGO_BIN")/rustc"

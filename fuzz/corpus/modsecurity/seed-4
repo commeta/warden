@@ -1,0 +1,5 @@
+--a1b2c3d4-A--
+[27/Oct/2026:12:00:00 +0300] U 203.0.113.50 51515 10.0.0.1 80
+--a1b2c3d4-H--
+Message: Access denied with code 403 (phase 2). [id "942100"] [msg "SQLi"] [severity "CRITICAL"]
+--a1b2c3d4-Z--

@@ -177,6 +177,21 @@ impl ActionSpec {
         matches!(self, ActionSpec::Kill { .. } | ActionSpec::KillCgroup)
     }
 
+    /// Containment of a compromise: may use `actions.containment_reserve`,
+    /// the part of the hourly budget hooks and cleanups cannot use up.
+    /// (`block_ip` has a budget of its own.)
+    pub fn is_containment(&self) -> bool {
+        matches!(
+            self,
+            ActionSpec::Kill { .. }
+                | ActionSpec::Stop
+                | ActionSpec::FreezeCgroup
+                | ActionSpec::KillCgroup
+                | ActionSpec::Quarantine
+                | ActionSpec::Throttle { .. }
+        )
+    }
+
     /// Containment that must not wait behind a cleanup or a hook: it acts
     /// on a live process, cgroup, file or address, and takes at most the
     /// kill grace. An event with one of these goes to the urgent lane of the

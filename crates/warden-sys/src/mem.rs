@@ -101,7 +101,7 @@ pub fn vm_counters() -> io::Result<VmCounters> {
     let m = vmstat()?;
     let g = |k: &str| m.get(k).copied().unwrap_or(0);
     // allocstall is split per zone on modern kernels.
-    let allocstall = m.iter().filter(|(k, _)| k.starts_with("allocstall")).map(|(_, v)| *v).sum();
+    let allocstall = m.iter().filter(|(k, _)| k.starts_with("allocstall")).fold(0u64, |a, (_, v)| a.saturating_add(*v));
     Ok(VmCounters {
         pswpin: g("pswpin"),
         pswpout: g("pswpout"),

@@ -1,250 +1,253 @@
-# Каталог событий
+# Event catalogue
 
-Всё, что замечает Warden, — это **событие**; всё, что он делает, сообщается как
-событие. Эта страница перечисляет каждый `kind`, который демон может порождать, с его обычной
-важностью и триггером. Триггеры, пороги и действия по умолчанию
-основных детекторов объяснены в [detectors.md](detectors.md); настройки —
-в эталонном [`config/warden.toml`](../config/warden.toml).
+Everything Warden notices is an **event**; everything it does is reported as
+one. This page lists every `kind` the daemon can emit, with its usual
+severity and what triggers it. Triggers, thresholds and default actions of the
+main detectors are explained in [detectors.md](detectors.md); the settings are
+in the reference [`config/warden.toml`](../config/warden.toml).
 
-## Анатомия
+## Anatomy
 
-Один JSON-объект на строку в `events.path` (по умолчанию
-`/var/log/warden/events.jsonl`), тот же объект в `wardenctl events --json`
-и в `WARDEN_EVENT_JSON`:
+One JSON object per line in `events.path` (default
+`/var/log/warden/events.jsonl`), the same object on `wardenctl events --json`
+and in `WARDEN_EVENT_JSON`:
 
-| поле | смысл |
+| field | meaning |
 |---|---|
-| `id` | уникальный и возрастающий, в том числе между рестартами (`wardenctl events --since-id N`) |
-| `ts_ms` | Unix-время, миллисекунды |
-| `kind` | точечное имя из таблиц ниже |
+| `id` | unique and increasing, also across restarts (`wardenctl events --since-id N`) |
+| `ts_ms` | Unix time, milliseconds |
+| `kind` | dotted name from the tables below |
 | `severity` | `info` < `notice` < `warning` < `critical` < `emergency` |
-| `title` | одна строка для человека |
-| `subject` | о чём событие: `system`, `process`, `file`, `mount`, `unit`, `ip`, `user` или `cgroup`. Действия разрешаются относительно него (`kill` убивает процесс-субъект, `block_ip` блокирует адрес-субъект, …) |
-| `source` | детектор, который его породил |
-| `fingerprint` | ключ дедупликации: одинаковый fingerprint в пределах cooldown сообщается один раз. Его первый сегмент — это `kind` события; условие сообщается как `kind[:detail]:<severity>` (`cpu.pressure:warning`, `disk.space:/:critical`, `process.cpu_hog:812:9731:warning`) и закрывается как `kind[:detail]:resolved`. Закрытие завершает эпизод `X` и всех `X:…`, так что вернувшееся условие сообщается снова сразу, как и следующее закрытие. Канал-нотификатор получает закрытие, только если получал условие |
-| `details` | структурированные факты (`exe`, `cmdline`, `parent`, `cgroup`, `ip`, …). `policy` перечисляет совпавшие правила `[[policy]]`; `ip_block_off` говорит, почему событие об адресе его не блокирует (например, `"auth.ssh_block = false"`, `"policy office NAT"`) — тогда эвристики тоже по нему не блокируют; `actions_withheld` говорит, почему действия события были намеренно отозваны (`"process.act_on_existing = false"`, `"policy #2 (alert_only)"`) — событие всё равно идёт в оценку подозрительности процесса, но не может заставить эвристики изолировать процесс |
-| `actions` | что запросил детектор; результат приходит следом событиями `action.*` |
-| `resolved` | `true` на событии «вернулось в норму» для условия |
+| `title` | one line for humans |
+| `subject` | what the event is about: `system`, `process`, `file`, `mount`, `unit`, `ip`, `user` or `cgroup`. Actions are resolved against it (`kill` kills the subject process, `block_ip` blocks the subject address, …) |
+| `source` | the detector that produced it |
+| `fingerprint` | de-duplication key: the same fingerprint inside the cooldown is reported once. Its first segment is the event's kind; a condition is reported as `kind[:detail]:<severity>` (`cpu.pressure:warning`, `disk.space:/:critical`, `process.cpu_hog:812:9731:warning`) and resolved as `kind[:detail]:resolved`. A resolution ends the episode of `X` and every `X:…`, so the condition coming back is reported again at once, and so is the next resolution. A notifier channel gets a resolution only if it got its condition |
+| `details` | structured facts (`exe`, `cmdline`, `parent`, `cgroup`, `ip`, …). `policy` lists the `[[policy]]` rules that matched; `ip_block_off` says why an event about an address does not block it (e.g. `"auth.ssh_block = false"`, `"policy office NAT"`) — the heuristics then do not block on it either; `actions_withheld` says why an event's actions were withheld on purpose (`"process.act_on_existing = false"`, `"policy #2 (alert_only)"`) — it still counts towards the process's suspicion score, but cannot make the heuristics contain it |
+| `actions` | what the detector asked for; the outcome follows as `action.*` events |
+| `resolved` | `true` on the "back to normal" event of a condition |
 
-**Условия.** Всё, что сообщает состояние — уровень выше порога,
-процесс выше лимита, точка монтирования ушла в read-only — имеет один жизненный цикл: оно
-сообщается, когда начинается (с его действиями), напоминается с экспоненциальным
-back-off'ом, пока держится (`reminder`, `next_reminder_in`: первый через
-`repeat` или 10 минут, затем с удвоением, не чаще раза в сутки), сообщается сразу, когда
-меняется его важность, и закрывается, когда останавливается (`info` + `resolved`,
-`lasted_seconds`). Закрытие с `closed_by: reload` было отправлено потому, что
-reload выключил детектор, наблюдавший за условием, а не потому, что
-оно исчезло.
+**Conditions.** Everything that reports a state — a level over a threshold,
+a process over a limit, a mount gone read-only — has one lifecycle: it is
+reported when it starts (with its actions), reminded with an exponential
+back-off while it holds (`reminder`, `next_reminder_in`: the first after
+`repeat` or 10 minutes, then doubling, at most daily), reported at once when
+its severity changes, and resolved when it stops (`info` + `resolved`,
+`lasted_seconds`). A resolution with `closed_by: reload` was sent because a
+reload disabled the detector that watched the condition, not because it
+cleared.
 
-Субъекты-процессы несут PID **и** время старта; каждое действие перепроверяет
-и то, и другое, так что переиспользованный PID никогда не затрагивается.
+Process subjects carry the PID **and** the start time; every action re-checks
+both, so a recycled PID is never touched.
 
-## Хуки: события в ваших собственных скриптах
+## Hooks: events in your own scripts
 
-И `exec`-действие, и нотификатор `[[notify.command]]` запускают программу
-с событием в окружении (нотификатор получает его так, как позволяет `notify.details`
-— по умолчанию секреты маскируются, см. [security](security.md); `exec`-хук получает оригинал):
+Both the `exec` action and a `[[notify.command]]` notifier start the program
+with the event in its environment (a notifier gets it as `notify.details`
+allows — secrets masked by default, see [security](security.md); an `exec`
+hook gets the original):
 
-| переменная | содержимое |
+| variable | content |
 |---|---|
-| `WARDEN_EVENT_JSON` | всё событие (без `details`, если они не помещаются в одну строку окружения, ~100 КБ) |
+| `WARDEN_EVENT_JSON` | the whole event (without `details` if it would not fit into one environment string, ~100 KB) |
 | `WARDEN_EVENT_KIND` | `kind` |
 | `WARDEN_SEVERITY` | `severity` |
-| `WARDEN_SUBJECT` | `subject` текстом, например `process php-fpm8.3[4012] user=www-data` |
+| `WARDEN_SUBJECT` | `subject` as text, e.g. `process php-fpm8.3[4012] user=www-data` |
 | `WARDEN_TITLE` | `title` |
 
-Хук работает от root с capability демона, если вы не дадите ему
-учётную запись: `user = "…"` на `exec`-действии, нотификаторе или командной проверке
-здоровья, или `daemon.command_user` для всех них — для этого пакет создаёт
-системного пользователя `_warden`; `user = "root"` на конкретном элементе оставляет один хук
-привилегированным. Переключение происходит в дочернем процессе перед `exec`
-(дополнительные группы, gid, uid) и сбрасывает все capability; программа
-получает `HOME`, `USER`, `LOGNAME` этого пользователя и `/` как рабочий каталог, так что
-она должна быть читаема и исполняема этим пользователем. Неизвестный пользователь проваливает
-хук (никогда не откатывается к root); `wardend --check-config` предупреждает об этом.
-Каждый хук — лидер своей группы процессов, и его таймаут убивает
-всю группу — то, что он запустил в фоне, умирает с ним. У `exec`-действия
-нет stdin; команда-нотификатор получает текст сообщения на stdin. То, что хук печатает,
-читается параллельно и ограничено (64 КиБ для `exec`, из которых первые 500 символов stdout идут в
-результат `action.exec`; 4 КиБ для нотификаторов), так что болтливый хук или дочерний процесс, держащий
-пайпы открытыми, не может заблокировать демон.
+A hook runs as root with the daemon's capabilities unless you give it an
+account: `user = "…"` on the `exec` action, the notifier or the command health
+check, or `daemon.command_user` for all of them — the package creates the
+system user `_warden` for this; a per-item `user = "root"` keeps one hook
+privileged. The switch happens in the child before `exec`
+(supplementary groups, gid, uid) and drops every capability; the program
+gets that user's `HOME`, `USER`, `LOGNAME` and `/` as working directory, so
+it must be readable and executable by that user. An unknown user fails the
+hook (it never falls back to root); `wardend --check-config` warns about it.
+Every hook is the leader of its own process group, and its timeout kills
+the whole group — what it started in the background dies with it. An
+`exec` action has no stdin; a notifier command gets the message
+text on stdin. What a hook prints is read concurrently and capped (64 KiB for
+`exec`, of which the first 500 characters of stdout go into the `action.exec`
+result; 4 KiB for notifiers), so a chatty hook, or a child that keeps the
+pipes open, cannot block the daemon.
 
-## Как читать таблицы
+## Reading the tables
 
-*Важность* — обычная; где показан диапазон, детектор выбирает по тому,
-насколько плохо условие. Детекторы включаются в своём `[section]` из
-`warden.toml`; `kind` никогда не появляется, когда его детектор выключен.
+*Severity* is the usual one; where a range is shown the detector chooses by
+how bad the condition is. Detectors are enabled in their `[section]` of
+`warden.toml`; a kind never appears when its detector is off.
 
-## Стабильность
+## Stability
 
-| kind | важность | когда |
+| kind | severity | when |
 |---|---|---|
-| `memory.pressure` | warning → critical | простой PSI памяти, низкий `MemAvailable` или использование свопа, удержание сверх `sustain`; называет виновника (RSS, его анонимную часть, своп) и топ cgroups. `kill_withheld` говорит, почему kill был отозван (неэффективный kill ранее в эпизоде, или достигнут `max_kills_per_episode`) |
-| `memory.swap_storm` | critical | устойчивая подкачка с высоким PSI full: ситуация «сервер висит и свопит» (тот же `kill_withheld`) |
-| `memory.kill_ineffective` | warning | жертву убили, но MemAvailable вырос меньше, чем на половину того, что она держала (`expected`, `freed`): память держится где-то ещё — `shmem` (tmpfs, разделяемая память), `slab_unreclaimable` — и kill'ы прекращаются до конца эпизода; `hint` говорит, где искать |
-| `memory.oom_kill` | warning | сработал OOM-killer ядра (счётчик сдвинулся) |
-| `cpu.pressure` | warning → critical | PSI cpu, нагрузка на CPU, iowait или задачи в D-состоянии |
-| `cpu.fork_storm` | warning | частота fork выше `fork_rate_warning` |
-| `io.pressure` | warning → critical | PSI io full; называет топ процессов по I/O |
-| `process.cpu_hog` | warning | один процесс выше `hog_percent` в течение `hog_duration`; закрывается, когда он успокаивается или выходит |
-| `process.limit_exceeded` | warning | правило `[[process.limit]]`: устойчивый CPU, время жизни или RSS; одно условие на правило и процесс, закрывается, когда возвращается в пределы лимита |
-| `process.zombies` | warning | накопление зомби; закрывается при снижении ниже `zombies_warning` |
-| `process.uninterruptible` | warning | долгое D-состояние; закрывается, когда процесс из него выходит |
-| `limits.process_fds` | warning | один процесс близок к своему `RLIMIT_NOFILE`; закрывается, когда уже нет |
-| `limits.file_handles`, `limits.pids`, `limits.conntrack` | warning → critical | системный лимит почти исчерпан; `[tuning] auto_grow` может его поднять |
-| `system.stall` | warning → critical | собственный высокоприоритетный планировщик Warden проснулся поздно: весь хост был заморожен |
-| `system.clock_unsynchronized` | warning | 15 минут часы не синхронизированы (флаг ядра или оценка ошибки); `info`, когда снова да |
-| `warden.slow_detector` | notice | детектор работал необычно долго (его имя и длительность в заголовке) |
-| `warden.worker_panic` | warning | поток демона (исполнитель, нотификатор, сенсор) запаниковал; он был перезапущен, а сбойный элемент пропущен |
+| `memory.pressure` | warning → critical | PSI memory stall, low `MemAvailable` or swap use, sustained past `sustain`; names the culprit (RSS, its anonymous part, swap) and top cgroups. `kill_withheld` says why the kill was taken off (an ineffective kill earlier in the episode, `max_kills_per_episode` reached, or only PSI is high while memory is available — `io_bound` when the I/O stall is larger) |
+| `memory.swap_storm` | critical | sustained paging with high PSI full: the "server hangs, swaps" situation (same `kill_withheld`) |
+| `memory.kill_ineffective` | warning | a victim was killed, but MemAvailable rose by less than half of what it held (`expected`, `freed`): the memory is held elsewhere — `shmem` (tmpfs, shared memory), `slab_unreclaimable` — and kills stop until the episode ends; `hint` says where to look |
+| `memory.oom_kill` | warning | the kernel OOM killer fired (counter moved) |
+| `cpu.pressure` | warning → critical | PSI cpu, load per CPU, iowait or D-state tasks |
+| `cpu.fork_storm` | warning | fork rate above `fork_rate_warning` |
+| `io.pressure` | warning → critical | PSI io full; names the top I/O processes |
+| `process.cpu_hog` | warning | one process over `hog_percent` for `hog_duration`; resolved when it calms down or exits |
+| `process.limit_exceeded` | warning | a `[[process.limit]]` rule: sustained CPU, lifetime or RSS; one condition per rule and process, resolved when it is back within the limit |
+| `process.zombies` | warning | zombie pile-up; resolved when below `zombies_warning` |
+| `process.uninterruptible` | warning | long D-state; resolved when the process leaves it |
+| `limits.process_fds` | warning | one process close to its `RLIMIT_NOFILE`; resolved when it is not |
+| `limits.file_handles`, `limits.pids`, `limits.conntrack` | warning → critical | a system-wide limit is nearly used up; `[tuning] auto_grow` may raise it |
+| `system.stall` | warning → critical; notice | Warden's own high-priority scheduler woke up late: the whole host was frozen (`cause = host`). On a VM, `hypervisor_steal` (steal time covers the delay) and `vm_paused` (no pressure inside the guest) are notices without a snapshot; `steal_seconds`, `psi_*` say why |
+| `system.clock_unsynchronized` | warning | for 15 minutes the clock is not synchronised (kernel flag or estimated error); `info` when it is again |
+| `warden.slow_detector` | notice | a detector took unusually long (its name and duration are in the title) |
+| `warden.worker_panic` | warning | a daemon thread (executor, notifier, sensor) panicked; it was restarted and the failing item skipped |
 
-## Диск
+## Disk
 
-| kind | важность | когда |
+| kind | severity | when |
 |---|---|---|
-| `disk.space` | warning → critical | использование выше порогов; `info` + `resolved`, когда вернулось в норму. Несёт `deleted_but_open` и `largest_files` (`largest_files_partial`, когда 1-секундный бюджет оборвал обход); напоминания с back-off'ом |
-| `disk.inodes` | warning → critical | исчерпание inode'ов; ступенчато снижается, напоминает с back-off'ом и закрывается как `disk.space` |
-| `disk.readonly` | notice / critical | **critical**: файловая система ушла в read-only под наблюдением (ошибки I/O или файловой системы), со снимком; **notice**: она уже была такой при первом взгляде (старт). `info` + `resolved`, когда снова записываема |
-| `disk.fill_prediction` | warning | точка монтирования заполнится в пределах `horizon` при текущей скорости |
-| `disk.usage_report` | notice | «кто занимает диск»: ограниченный фоновый обход, запускается сразу для критической точки монтирования и после любой очистки, освободившей ноль |
+| `disk.space` | warning → critical | usage over the thresholds; `info` + `resolved` when back to normal. Carries `deleted_but_open` and `largest_files` (`largest_files_partial` when the 1 s budget cut the walk); reminders back off |
+| `disk.inodes` | warning → critical | inode exhaustion; steps down, reminds with back-off and is resolved like `disk.space` |
+| `disk.readonly` | notice / critical | **critical**: a filesystem became read-only while watched (I/O or filesystem errors), with a snapshot; **notice**: it already was when first seen (startup). `info` + `resolved` when it is writable again |
+| `disk.fill_prediction` | warning | the mount fills up within `horizon` at the current rate |
+| `disk.usage_report` | notice | "who is using the disk": a bounded background walk, started at once for a critical mount and after any cleanup that freed nothing |
 
-## Железо и ядро
+## Hardware and kernel
 
-| kind | важность | когда |
+| kind | severity | when |
 |---|---|---|
-| `hardware.memory_corrected` | warning | EDAC: исправленные ошибки ECC |
-| `hardware.memory_uncorrected` | critical | EDAC: неисправимые ошибки ECC |
-| `hardware.temperature` | warning → critical | термозона выше своего порога; `info`, когда снова норма |
-| `hardware.thermal_throttle` | warning | в логе ядра сказано, что частота CPU была урезана |
+| `hardware.memory_corrected` | warning | EDAC: corrected ECC errors |
+| `hardware.memory_uncorrected` | critical | EDAC: uncorrectable ECC errors |
+| `hardware.temperature` | warning → critical | a thermal zone over its threshold; `info` when normal again |
+| `hardware.thermal_throttle` | warning | the kernel log says the CPU clock was throttled |
 | `hardware.mce` | warning | machine-check events |
-| `kernel.oom_kill` | warning | лог ядра сообщает об OOM-kill; называет cgroup, чей лимит был исчерпан |
-| `kernel.hung_task` | warning | «заблокирован более чем на N секунд» |
-| `kernel.soft_lockup`, `kernel.hard_lockup` | critical | зависания CPU |
-| `kernel.rcu_stall` | warning | обнаружен RCU stall |
+| `kernel.oom_kill` | warning | the kernel log reports an OOM kill; names the cgroup whose limit was hit |
+| `kernel.hung_task` | warning | "blocked for more than N seconds" |
+| `kernel.soft_lockup`, `kernel.hard_lockup` | critical | CPU lockups |
+| `kernel.rcu_stall` | warning | RCU stall detected |
 | `kernel.oops` | critical | oops, BUG, general protection fault, panic |
-| `kernel.fs_error` | critical | ошибки ext4/XFS/btrfs/F2FS |
-| `kernel.io_error` | warning | ошибки блочного устройства или NVMe/ATA (устройство в `details`) |
-| `kernel.segfault` | info | пользовательский процесс получил segfault |
-| `kernel.segfault_burst` | warning | одна и та же программа упала несколько раз за 5 минут |
-| `kernel.unsigned_module`, `kernel.out_of_tree_module` | warning / notice | сообщения о подписи модуля или его «вне дерева» |
-| `kernel.taint` | warning → critical | флаги taint ядра изменились (critical для принудительного модуля, machine check, bad page, live patch…) |
-| `network.conntrack_full` | critical | «nf_conntrack: table full, dropping packet» |
-| `network.syn_flood_kernel` | warning | ядро залогировало «Possible SYN flooding» |
-| `network.link_down`, `network.link_up` | warning / info + `resolved` | изменения состояния линка, один раз на изменение и интерфейс (flap сообщается полностью); fingerprint `network.link:<iface>`, `:resolved` для «up» |
-| `network.listen_overflow` | warning | переполняются очереди accept; закрывается |
-| `network.syn_flood` | warning | SYN-cookies используются на высокой частоте; закрывается |
-| `network.retransmits` | warning | TCP-ретрансмиссии выше порога; закрывается |
-| `network.iface_errors` | warning | ошибки и дропы интерфейса в секунду; закрывается, в том числе когда интерфейс исчезает (его счётчики и серии метрик удаляются) |
-| `lsm.apparmor_denied`, `lsm.selinux_denied` | info | отказы в доступе |
-| `lsm.denial_burst` | warning | много отказов одной и той же программы за короткое время |
-| `tuning.advice` | notice | sysctl или настройка ядра не подходит железу или нагрузке (`wardenctl tuning`) |
+| `kernel.fs_error` | critical | ext4/XFS/btrfs/F2FS errors |
+| `kernel.io_error` | warning | block-device or NVMe/ATA errors (the device is in `details`) |
+| `kernel.segfault` | info | a user process segfaulted |
+| `kernel.segfault_burst` | warning | the same program crashed repeatedly within 5 minutes |
+| `kernel.unsigned_module`, `kernel.out_of_tree_module` | warning / notice | module signature or taint messages |
+| `kernel.taint` | warning → critical | the kernel's taint flags changed (critical for a forced module, machine check, bad page, live patch…) |
+| `network.conntrack_full` | critical | "nf_conntrack: table full, dropping packet" |
+| `network.syn_flood_kernel` | warning | the kernel logged "Possible SYN flooding" |
+| `network.link_down`, `network.link_up` | warning / info + `resolved` | link state changes, once per change and interface (a flap is reported in full); fingerprint `network.link:<iface>`, `:resolved` for "up" |
+| `network.listen_overflow` | warning | accept queues overflowing; resolved |
+| `network.syn_flood` | warning | SYN cookies in use at a high rate; resolved |
+| `network.retransmits` | warning | TCP retransmissions over the threshold; resolved |
+| `network.iface_errors` | warning | interface errors and drops per second; resolved, also when the interface disappears (its counters and metric series are dropped) |
+| `lsm.apparmor_denied`, `lsm.selinux_denied` | info | access denials |
+| `lsm.denial_burst` | warning | many denials of the same program in a short time |
+| `tuning.advice` | notice | a sysctl or kernel setting does not fit the hardware or the workload (`wardenctl tuning`) |
 
-## Сервисы
+## Services
 
-| kind | важность | когда |
+| kind | severity | when |
 |---|---|---|
-| `systemd.unit_failed` | warning → critical | юнит вошёл в `failed`, сообщается сразу через D-Bus; для юнитов из `auto_restart` с действием `restart_unit` — решает бюджет рестартов responder'а на юнит (`max_restarts_per_hour`, списывается только за реально выполненные рестарты); critical, когда юнит падал чаще этого в течение часа |
-| `health.down` | critical | проба `[[health.check]]` провалилась `failures` раз подряд; `info` + `resolved`, когда восстановилась |
+| `systemd.unit_failed` | warning → critical | a unit entered `failed`, reported at once over D-Bus; for `auto_restart` units with a `restart_unit` action — the responder's per-unit budget (`max_restarts_per_hour`, charged only for restarts that ran) decides; critical when the unit failed more often than that within the hour |
+| `health.down` | critical | a `[[health.check]]` probe failed `failures` times in a row; `info` + `resolved` when it recovers |
 
-## Вторжение
+## Intrusion
 
-| kind | важность | когда |
+| kind | severity | when |
 |---|---|---|
-| `security.privilege_escalation` | critical | root-процесс от не-root-родителя, не являющегося известным брокером; `setuid(0)` программой, никогда не имевшей root |
-| `security.unknown_suid_exec` | critical | euid 0 для не-root-пользователя через SUID-бинарник, который не разрешён |
-| `security.fileless_exec` | critical | код запускается из `memfd:` или из образа, удалённого из записываемого места. memfd контейнерного рантайма принимается, только если его запустил системный бинарник рантайма |
-| `security.reverse_shell` | critical | shell с stdin/stdout на TCP-сокете |
-| `security.bind_shell`, `security.new_listener` | critical / notice | новый слушающий сокет; шеллоподобные — critical |
-| `security.miner`, `security.miner_port` | critical / warning | известное имя майнера, или загрузка CPU плюс порт майнинг-пула |
-| `security.masquerade` | critical | процесс, замаскированный под поток `[kernel]` |
-| `security.web_spawn` | warning → critical | веб-воркер породил shell или инструмент; critical при флагах загрузчика или reverse shell |
-| `security.db_spawn` | warning → critical | сервер БД породил shell или инструмент |
-| `security.exec_from_writable` | notice → critical | программа запущена из записываемого или upload-каталога |
-| `security.ld_preload` | warning | привилегированный или веб-процесс с подозрительным `LD_PRELOAD` |
-| `security.ptrace` | notice → warning | не-отладчик присоединился через ptrace |
-| `security.new_lineage` | notice | сервис или веб-учётная запись запустила программу, никогда не виденную во время обучения |
-| `process.stale_binary` | notice | бинарник заменён на диске (обновление пакета), пока процесс работает со старым; подсказка называет юнит для перезапуска |
-| `process.deleted_binary` | warning | бинарник удалён из системного пути и не заменён |
-| `security.webshell` | warning → critical | сигнатуры пометили файл сайта (оценка на уровне `fim.alert_score` или выше) |
-| `security.malicious_writer` | critical | веб-воркер, записавший помеченный файл |
-| `security.webshell_access` | critical | запрос попал в помеченный файл: кто-то использует шелл |
-| `security.waf_attack` | warning | один IP заблокирован ModSecurity `block_after` раз в пределах `window` |
-| `waf.hit` | info | ModSecurity заблокировала запрос (не более одного события на IP в минуту) |
-| `security.kernel_lockdown_violation` | warning | kernel lockdown отказал в чём-то |
-| `security.kernel_module_loaded` | notice | загружен модуль ядра |
-| `security.lsm_disabled` | critical | AppArmor выключен, или SELinux перешёл в permissive, во время работы |
-| `security.lsm_profiles_unloaded` | warning | число профилей AppArmor в режиме enforce упало |
-| `heuristics.suspicious` | warning | накопленная оценка подозрительности процесса перешла `alert_score`; `containment_withheld`, когда она также перешла `contain_score` по доказательствам с отозванными действиями (`actions_withheld`) |
-| `heuristics.contain` | critical | … перешла `contain_score`; несёт `on_contain` |
-| `heuristics.ip_threshold` | warning | то же для удалённого адреса |
+| `security.privilege_escalation` | critical | a root process from a non-root parent that is not a known broker; `setuid(0)` by a program that never had root |
+| `security.unknown_suid_exec` | critical | euid 0 for a non-root user through a SUID binary that is not allowed |
+| `security.fileless_exec` | critical | code runs from `memfd:` or from an image deleted from a writable place. The memfd of a container runtime is accepted only when a system runtime binary started it |
+| `security.reverse_shell` | critical | a shell with stdin/stdout on a TCP socket |
+| `security.bind_shell`, `security.new_listener` | critical / notice | a new listening socket; shell-like ones are critical |
+| `security.miner`, `security.miner_port` | critical / warning | a known miner name, or CPU burn plus a mining-pool port |
+| `security.masquerade` | critical | a process disguised as a `[kernel]` thread |
+| `security.web_spawn` | warning → critical | a web worker spawned a shell or tool; critical with downloader or reverse-shell flags |
+| `security.db_spawn` | warning → critical | a database server spawned a shell or tool |
+| `security.exec_from_writable` | notice → critical | a program started from a writable or upload location |
+| `security.ld_preload` | warning | a privileged or web process with a suspicious `LD_PRELOAD` |
+| `security.ptrace` | notice → warning | a non-debugger attached with ptrace |
+| `security.new_lineage` | notice | a service or web account ran a program never seen while learning |
+| `process.stale_binary` | notice | the binary was replaced on disk (package upgrade) while the process still runs the old one; the hint names the unit to restart |
+| `process.deleted_binary` | warning | the binary was removed from a system path and not replaced |
+| `security.webshell` | warning → critical | signatures flagged a site file (score at or above `fim.alert_score`) |
+| `security.malicious_writer` | critical | the web worker that wrote a flagged file |
+| `security.webshell_access` | critical | a request hit a flagged file: someone is using the shell |
+| `security.waf_attack` | warning | one IP blocked by ModSecurity `block_after` times within `window` |
+| `security.waf_log_tampered` | warning | entries of a concurrent ModSecurity log changed after they were written: their MD5 is not the one in the index (`details.log`, `details.entries`); they are ignored — look for whoever can write the storage directory as the web user |
+| `waf.hit` | info | ModSecurity blocked a request (at most one event per IP per minute) |
+| `security.kernel_lockdown_violation` | warning | kernel lockdown refused something |
+| `security.kernel_module_loaded` | notice | a kernel module was loaded |
+| `security.lsm_disabled` | critical | AppArmor was disabled, or SELinux went permissive, at runtime |
+| `security.lsm_profiles_unloaded` | warning | the number of enforced AppArmor profiles dropped |
+| `heuristics.suspicious` | warning | accumulated suspicion score of a process crossed `alert_score`; `containment_withheld` when it also crossed `contain_score` on evidence whose actions were withheld (`actions_withheld`) |
+| `heuristics.contain` | critical | …crossed `contain_score`; carries `on_contain` |
+| `heuristics.ip_threshold` | warning | the same for a remote address |
 
-## Аутентификация
+## Authentication
 
-Источник journald принимает строку, только если отправитель заверен ядром
-(root или системный бинарник, совпадающий с именем программы); `logger -t sshd`
-от непривилегированного пользователя считается в `warden_auth_untrusted_lines_total`
-и игнорируется. Источник-файл `auth.log` не различает отправителей.
+The journal source accepts a line only from a sender the kernel vouches for
+(root, or the system binary that matches the program name); `logger -t sshd`
+from an unprivileged user is counted in `warden_auth_untrusted_lines_total`
+and ignored. The `auth.log` file source cannot tell senders apart.
 
-| kind | важность | когда |
+| kind | severity | when |
 |---|---|---|
-| `security.ssh_bruteforce` | warning | повторяющиеся SSH-неудачи с одного адреса; блокирует его через `block_ip`, если он не в allowlist |
-| `security.bruteforce_success` | critical | логин успешен с адреса после всплеска неудач |
-| `auth.root_login` | warning | root вошёл по SSH (`alert_root_login`) |
-| `auth.login` | info | вход по SSH |
-| `auth.sudo` | info | команда `sudo` |
-| `auth.sudo_failure` | warning / critical | неудачи sudo; critical для веб-учётной записи |
-| `security.web_user_sudo` | critical | веб-учётная запись использовала `sudo` |
-| `auth.su_failure` | warning | неудача аутентификации `su` |
-| `auth.account_created` | warning | создана учётная запись пользователя |
-| `security.uid0_account` | critical | новая учётная запись с uid 0 |
-| `auth.privileged_group` | warning | пользователь добавлен в `sudo`, `wheel`, `docker`, … |
-| `auth.account_deleted` | notice | учётная запись пользователя удалена |
-| `auth.password_changed` | notice | сменился пароль |
+| `security.ssh_bruteforce` | warning | repeated SSH failures from one address; blocks it with `block_ip` unless allow-listed |
+| `security.bruteforce_success` | critical | a login succeeded from an address after a burst of failures |
+| `auth.root_login` | warning | root logged in over SSH (`alert_root_login`) |
+| `auth.login` | info | an SSH login |
+| `auth.sudo` | info | a `sudo` command |
+| `auth.sudo_failure` | warning / critical | sudo failures; critical for a web account |
+| `security.web_user_sudo` | critical | a web account used `sudo` |
+| `auth.su_failure` | warning | `su` authentication failure |
+| `auth.account_created` | warning | a user account was created |
+| `security.uid0_account` | critical | a new account with uid 0 |
+| `auth.privileged_group` | warning | a user was added to `sudo`, `wheel`, `docker`, … |
+| `auth.account_deleted` | notice | a user account was deleted |
+| `auth.password_changed` | notice | a password was changed |
 
-## Целостность
+## Integrity
 
-| kind | важность | когда |
+| kind | severity | when |
 |---|---|---|
-| `integrity.baseline_created` | info | снят baseline системных файлов (первый старт) |
-| `integrity.file_changed` | notice → warning | отслеживаемый файл изменился |
-| `integrity.accounts_changed` | notice | изменились `/etc/passwd`, `group`, `shadow`, `gshadow` |
-| `security.binary_replaced` | critical | изменились `sudo`, `sshd`, `passwd`, `login` или `su` |
-| `security.sudoers_changed` | warning | изменились `sudoers` или `sudoers.d` |
-| `security.ssh_keys_changed`, `security.ssh_key_added` | warning | изменился `authorized_keys` или в него добавлен ключ |
-| `security.pam_changed` | warning | изменилась конфигурация PAM |
-| `security.ld_so_preload` | critical | появился или изменился `/etc/ld.so.preload` |
-| `security.persistence_cron`, `security.persistence_systemd`, `security.persistence_shell`, `security.persistence_system` | warning | изменились места автозапуска: cron, юниты systemd, профили shell, другие системные хуки |
-| `integrity.suid_baseline` | info | снят baseline SUID/SGID |
-| `security.new_suid` | info → critical | новый SUID/SGID-файл, в реальном времени через fanotify или периодическим обходом |
-| `fim.baseline_created` | info | снят baseline веб-сайта |
-| `fim.changed` | notice | файл сайта изменился (с писателем, когда он известен) |
-| `fim.changes` | notice | сводка изменений, найденных сканом |
-| `fim.mass_change` | warning → emergency | `burst_files` изменений в пределах `burst_window`. **emergency** только когда изменения в окне совпали с сигнатурами (`malicious_content: true`, `malicious_writers`): инфекция распространяется, и только те писатели убиваются (`kill_writer`). Без вредоносного содержимого — **warning**, как выглядит обновление CMS или плагина, с `hint` поставить FIM на паузу вокруг обновлений (`wardenctl fim pause <site> 30m`) |
-| `fim.deleted` | notice | файлы сайта были удалены |
-| `fim.world_writable` | warning | скриптовые файлы стали доступны на запись всем |
+| `integrity.baseline_created` | info | the system-file baseline was taken (first start) |
+| `integrity.file_changed` | notice → warning | a watched file changed |
+| `integrity.accounts_changed` | notice | `/etc/passwd`, `group`, `shadow`, `gshadow` changed |
+| `security.binary_replaced` | critical | `sudo`, `sshd`, `passwd`, `login` or `su` changed |
+| `security.sudoers_changed` | warning | `sudoers` or `sudoers.d` changed |
+| `security.ssh_keys_changed`, `security.ssh_key_added` | warning | `authorized_keys` changed or gained a key |
+| `security.pam_changed` | warning | PAM configuration changed |
+| `security.ld_so_preload` | critical | `/etc/ld.so.preload` appeared or changed |
+| `security.persistence_cron`, `security.persistence_systemd`, `security.persistence_shell`, `security.persistence_system` | warning | startup places changed: cron, systemd units, shell profiles, other system-wide hooks |
+| `integrity.suid_baseline` | info | the SUID/SGID baseline was taken |
+| `security.new_suid` | info → critical | a new SUID/SGID file, in real time through fanotify or by the periodic walk |
+| `fim.baseline_created` | info | the baseline of a web site was taken |
+| `fim.changed` | notice | a file of a site changed (with the writer, when known) |
+| `fim.changes` | notice | summary of changes found by a scan |
+| `fim.mass_change` | warning → emergency | `burst_files` changes within `burst_window`. **emergency** only when changes in the window matched the signatures (`malicious_content: true`, `malicious_writers`): an infection spreading, and only those writers are killed (`kill_writer`). Without malicious content it is a **warning** — what a CMS or plugin update looks like — with a `hint` to pause FIM around updates (`wardenctl fim pause <site> 30m`) |
+| `fim.deleted` | notice | site files were deleted |
+| `fim.world_writable` | warning | script files were made world-writable |
 
-## Что сделал Warden
+## What Warden did
 
-Каждое действие, которое было выполнено, отклонено или пропущено, сообщается как событие
-kind `action.<name>`: субъект исходного события, `details.status`
-(`done`, `dry_run`, `skipped` — cooldown или rate limit, `refused` — защищённая
-цель или бюджет — или `failed`), `details.cause_id` / `cause_kind` / `cause`
-указывают на событие, которое его запросило, а для очисток — `details.freed_bytes`.
-Важность следует за исходом: `warning` для реального изменения или отказа,
-`notice` для dry-run, отказа или очистки, ничего не нашедшей, `info`
-для снимка или пропуска.
+Every action that was executed, refused or skipped is reported as an event of
+kind `action.<name>`: the subject of the original event, `details.status`
+(`done`, `dry_run`, `skipped` — cooldown or rate limit —, `refused` — protected
+target or budget — or `failed`), `details.cause_id` / `cause_kind` / `cause`
+pointing at the event that asked for it and, for cleanups, `details.freed_bytes`.
+Severity follows the outcome: `warning` for a real change or a failure,
+`notice` for a dry run, a refusal or a cleanup that found nothing, `info`
+for a snapshot or a skip.
 
-`<name>` — одно из `snapshot`, `kill`, `stop`, `freeze_cgroup`, `kill_cgroup`,
+`<name>` is one of `snapshot`, `kill`, `stop`, `freeze_cgroup`, `kill_cgroup`,
 `restart_unit`, `quarantine`, `block_ip`, `journal_vacuum`, `delete_old`,
 `truncate_large`, `truncate_deleted`, `apt_clean`, `throttle`, `limit_unit`,
 `sysctl`, `exec`.
 
-Сам демон сообщает:
+The daemon itself reports:
 
-| kind | важность | когда |
+| kind | severity | when |
 |---|---|---|
-| `warden.started` | info | старт (с `dry_run` и `dry_run_source`: `config`, `cli` или `override`) |
-| `warden.reloaded`, `warden.reload_failed` | info / warning | `SIGHUP` / `systemctl reload`; `notice` с `restart_required`, когда изменённая настройка читается только при старте (`daemon.state_dir`, `daemon.mlock`, `metrics.listen`, …) |
-| `warden.dry_run` | notice | изменился действующий режим dry-run: `enabled`, `source` (`override` — `wardenctl dry-run on/off`, сохраняется между reload'ами и рестартами; `config` — reload, `wardenctl dry-run reset`, или override снят, потому что `dry_run` изменён в конфигурации; `cli` — `--dry-run`) и `reason`. Также при старте, если действует сохранённый override |
-| `warden.quarantine_restored` | notice | файл из карантина восстановлен |
-| `warden.tuning_reverted` | notice | отменены изменения sysctl, сделанные Warden |
+| `warden.started` | info | start (with `dry_run` and `dry_run_source`: `config`, `cli` or `override`) |
+| `warden.reloaded`, `warden.reload_failed` | info / warning | `SIGHUP` / `systemctl reload`; `notice` with `restart_required` when a changed setting is read only at startup (`daemon.state_dir`, `daemon.mlock`, `metrics.listen`, …) |
+| `warden.dry_run` | notice | the effective dry-run mode changed: `enabled`, `source` (`override` — `wardenctl dry-run on/off`, kept across reloads and restarts; `config` — a reload, `wardenctl dry-run reset`, or an override dropped because `dry_run` was changed in the configuration; `cli` — `--dry-run`) and `reason`. Also at startup when a stored override is in effect |
+| `warden.quarantine_restored` | notice | a quarantined file was restored |
+| `warden.tuning_reverted` | notice | sysctl changes made by Warden were reverted |
 | `warden.manual_snapshot` | notice | `wardenctl snapshot` |

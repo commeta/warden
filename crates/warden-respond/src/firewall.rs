@@ -6,7 +6,7 @@
 //! firewalld, docker) is untouched.
 
 use std::net::IpAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use warden_core::config::FirewallConfig;
 use warden_core::net::{IpSet, canonical};
 use warden_sys::cmd::{run_cmd, run_with_input, which};
@@ -16,7 +16,15 @@ pub struct Firewall {
     cfg: FirewallConfig,
     allow: IpSet,
     ready: bool,
+    /// Entries in the sets as last listed, plus the blocks added since:
+    /// listing a set of tens of thousands of entries on every block made
+    /// each block slower than the last (N11). Expired entries are only
+    /// noticed at the next listing, so the count errs on the high side.
+    count: Option<(Instant, usize)>,
 }
+
+/// How long a listed count of the sets is trusted.
+const COUNT_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Blocked {
@@ -27,7 +35,7 @@ pub struct Blocked {
 impl Firewall {
     pub fn new(cfg: &FirewallConfig, extra_allow: &[String]) -> Self {
         let all: Vec<String> = cfg.allowlist.iter().chain(extra_allow).cloned().collect();
-        Self { cfg: cfg.clone(), allow: IpSet::new(&all), ready: false }
+        Self { cfg: cfg.clone(), allow: IpSet::new(&all), ready: false, count: None }
     }
 
     /// The nft script that (re)creates Warden's table, preserving set contents.
@@ -76,7 +84,7 @@ impl Firewall {
             return Err(format!("{ip} is not a unicast address"));
         }
         self.ensure()?;
-        if self.cfg.max_blocked > 0 && self.list().len() >= self.cfg.max_blocked {
+        if self.cfg.max_blocked > 0 && self.blocked_count() >= self.cfg.max_blocked {
             return Err(format!("blocklist full ({} entries)", self.cfg.max_blocked));
         }
         let ttl = ttl.unwrap_or(self.cfg.default_ttl).as_secs().max(60);
@@ -94,12 +102,31 @@ impl Firewall {
                     run_cmd("nft", &["add", "element", "inet", &self.cfg.table, &set, &elem], Duration::from_secs(10))
                         .map_err(|e| e.to_string())?;
                 if o2.status.success() {
+                    self.count = None;
                     return Ok(format!("blocked {ip} for {ttl}s"));
                 }
             }
             return Err(format!("nft add element: {}", err.trim()));
         }
+        if let Some((_, n)) = self.count.as_mut() {
+            *n += 1;
+        }
         Ok(format!("blocked {ip} for {ttl}s"))
+    }
+
+    /// Entries in the blocklist sets: listed again when the last listing is
+    /// older than [`COUNT_TTL`] or the count is near `max_blocked` (where
+    /// expired entries matter), counted up in between.
+    fn blocked_count(&mut self) -> usize {
+        let max = self.cfg.max_blocked;
+        match self.count {
+            Some((at, n)) if at.elapsed() < COUNT_TTL && n < max.saturating_sub(max / 10) => n,
+            _ => {
+                let n = self.list().len();
+                self.count = Some((Instant::now(), n));
+                n
+            }
+        }
     }
 
     pub fn unblock(&mut self, ip: IpAddr) -> Result<String, String> {
@@ -110,6 +137,9 @@ impl Firewall {
         let o = run_cmd("nft", &["delete", "element", "inet", &self.cfg.table, &set, &elem], Duration::from_secs(10))
             .map_err(|e| e.to_string())?;
         if o.status.success() {
+            if let Some((_, n)) = self.count.as_mut() {
+                *n = n.saturating_sub(1);
+            }
             Ok(format!("unblocked {ip}"))
         } else {
             Err(String::from_utf8_lossy(&o.stderr).trim().to_owned())

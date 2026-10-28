@@ -13,6 +13,13 @@
 #   --dry-run         set dry_run = true explicitly (the default; kept for older scripts)
 #   --no-build        never build; use existing target/release binaries
 #   --no-restart      do not restart an already running service after an upgrade
+#   --force           install even if the new binary rejects the existing configuration
+#
+# Upgrades are checked before anything changes: the new wardend validates the
+# configuration in place (with its conf.d drop-ins) first, and refuses to
+# install if it does not accept it. The previous binaries are kept as
+# wardend.old / wardenctl.old; if the restarted service does not come up, they
+# are put back and the old version is started again.
 #
 # Building: when run through sudo, the binaries are built as the *invoking user*
 # with that user's Rust toolchain (~/.cargo/bin), so nothing in your home or in
@@ -24,7 +31,7 @@
 # if it was running.
 set -euo pipefail
 
-PROFILE=""; ENABLE=0; START=0; DRYRUN_CFG=""; BUILD=auto; RESTART=1
+PROFILE=""; ENABLE=0; START=0; DRYRUN_CFG=""; BUILD=auto; RESTART=1; FORCE=0
 PREFIX="${PREFIX:-/usr}"
 SBIN="$PREFIX/sbin"; BIN="$PREFIX/bin"; CONFDIR="/etc/warden"; SHAREDIR="$PREFIX/share/warden"
 
@@ -38,6 +45,7 @@ while [ $# -gt 0 ]; do
         --no-build) BUILD=no; shift ;;
         --build) BUILD=yes; shift ;;
         --no-restart) RESTART=0; shift ;;
+        --force) FORCE=1; shift ;;
         -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
     esac
@@ -136,9 +144,37 @@ done
 WAS_ACTIVE=0
 if [ -d /run/systemd/system ] && systemctl is-active --quiet wardend.service 2>/dev/null; then WAS_ACTIVE=1; fi
 
+# An upgrade must not leave the host unprotected: the new binary validates the
+# configuration that is in place before anything is replaced (N12 of the
+# 0.14.1 review — the old installer restarted first and warned afterwards).
+if [ -f "$CONFDIR/warden.toml" ]; then
+    if ! CHECK_OUT="$(target/release/wardend --check-config --config "$CONFDIR/warden.toml" 2>&1)"; then
+        echo "$CHECK_OUT" >&2
+        if [ "$FORCE" = 1 ]; then
+            note "the new wardend rejects $CONFDIR/warden.toml — installing anyway (--force); the service is not restarted"
+            RESTART=0; START=0
+        else
+            die "the new wardend rejects the configuration in $CONFDIR (above); nothing was changed.
+  Fix the configuration, or install anyway with --force (the running service is then left alone)."
+        fi
+    fi
+fi
+
 info "Installing binaries to $SBIN and $BIN"
+# keep the previous version for a rollback
+[ -x "$SBIN/wardend" ] && cp -p "$SBIN/wardend" "$SBIN/wardend.old"
+[ -x "$BIN/wardenctl" ] && cp -p "$BIN/wardenctl" "$BIN/wardenctl.old"
 install -D -m 0755 target/release/wardend  "$SBIN/wardend.new" && mv -f "$SBIN/wardend.new" "$SBIN/wardend"
 install -D -m 0755 target/release/wardenctl "$BIN/wardenctl.new" && mv -f "$BIN/wardenctl.new" "$BIN/wardenctl"
+
+rollback() {
+    [ -x "$SBIN/wardend.old" ] || return 1
+    note "putting the previous version back ($SBIN/wardend.old)"
+    mv -f "$SBIN/wardend.old" "$SBIN/wardend"
+    [ -x "$BIN/wardenctl.old" ] && mv -f "$BIN/wardenctl.old" "$BIN/wardenctl"
+    systemctl reset-failed wardend.service 2>/dev/null || true
+    systemctl restart wardend.service && sleep 3 && systemctl is-active --quiet wardend.service
+}
 
 install -d -m 0700 /var/lib/warden /var/lib/warden/fim /var/lib/warden/quarantine /var/lib/warden/snapshots
 # An unprivileged account for hooks and notification commands
@@ -196,6 +232,10 @@ if "$SBIN/wardend" --check-config --config "$CONFDIR/warden.toml" >/dev/null 2>&
 else
     echo "  warning: configuration did not validate:"
     "$SBIN/wardend" --check-config --config "$CONFDIR/warden.toml" || true
+    if [ "$WAS_ACTIVE" = 1 ]; then
+        note "the running service is left alone: fix the configuration, then 'systemctl restart wardend'"
+        RESTART=0; START=0
+    fi
 fi
 
 if [ -d /run/systemd/system ]; then
@@ -208,6 +248,9 @@ if [ -d /run/systemd/system ]; then
         else
             echo -e "\033[31m  wardend failed to start:\033[0m"
             systemctl --no-pager --full status wardend.service | head -15 || true
+            if [ "$WAS_ACTIVE" = 1 ] && rollback; then
+                note "the previous version is running again; the new one is in target/release"
+            fi
             echo "  diagnose with: wardenctl doctor ; journalctl -u wardend -n 50"
             exit 1
         fi

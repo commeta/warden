@@ -44,12 +44,16 @@ pub struct Lanes {
     pub slow: SyncSender<Event>,
 }
 
+/// Fingerprints remembered for deduplication at most.
+const DEDUP_CAP: usize = 20_000;
+
 pub struct Engine {
     shared: Arc<Shared>,
     policy: Policy,
     log: EventLog,
     dedup: HashMap<String, (Instant, Severity)>,
     dedup_gc_at: usize,
+    dedup_evicted: u64,
     generation: u64,
     notify_tx: SyncSender<Event>,
     respond: Lanes,
@@ -74,6 +78,7 @@ impl Engine {
             queue_drops: Default::default(),
             dedup: HashMap::new(),
             dedup_gc_at: 4096,
+            dedup_evicted: 0,
             generation: shared.generation(),
             shared,
             notify_tx,
@@ -174,7 +179,20 @@ impl Engine {
             warden_core::event::end_episodes(&mut self.dedup, &ev.fingerprint);
             if self.dedup.len() > self.dedup_gc_at {
                 self.dedup.retain(|_, (t, _)| now.saturating_duration_since(*t) < window);
-                self.dedup_gc_at = (self.dedup.len() * 2).max(4096);
+                // a flood of distinct fingerprints within the window (one
+                // per address) is bounded too: the oldest go first, and a
+                // forgotten one only means a repeat is journaled again
+                if self.dedup.len() > DEDUP_CAP {
+                    let n =
+                        warden_core::ratelimit::evict_lowest(&mut self.dedup, DEDUP_CAP - DEDUP_CAP / 10, |(t, _)| *t);
+                    self.dedup_evicted += n as u64;
+                    self.shared.metrics.set(
+                        "warden_state_evicted_total",
+                        &[("table", "event_dedup")],
+                        self.dedup_evicted as f64,
+                    );
+                }
+                self.dedup_gc_at = (self.dedup.len() * 2).clamp(4096, DEDUP_CAP);
             }
         }
         dup
@@ -341,6 +359,29 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(lines() >= 4, "{} lines in the journal", lines());
+    }
+
+    /// N3 for the engine: one fingerprint per address (`waf.hit:<ip>`) from
+    /// a flood of addresses does not grow the dedup table without bound, and
+    /// a recent fingerprint is still deduplicated.
+    #[test]
+    fn the_dedup_table_is_bounded() {
+        let d = tempfile::tempdir().unwrap();
+        let mut cfg = Config::default();
+        cfg.events.path = d.path().join("events.jsonl");
+        cfg.daemon.state_dir = d.path().to_path_buf();
+        let shared = Shared::new(cfg);
+        let (ntx, _nrx) = std::sync::mpsc::sync_channel(WORKER_QUEUE);
+        let (rtx, _rrx) = std::sync::mpsc::sync_channel(WORKER_QUEUE);
+        let (stx, _srx) = std::sync::mpsc::sync_channel(WORKER_QUEUE);
+        let mut e = Engine::new(shared, Default::default(), ntx, Lanes { urgent: rtx, slow: stx }).unwrap();
+        let ev = |i: usize| Event::new("waf.hit", Severity::Info, "hit").fingerprint(format!("waf.hit:{i}"));
+        for i in 0..DEDUP_CAP * 2 {
+            assert!(!e.duplicate(&ev(i)));
+        }
+        assert!(e.dedup.len() <= DEDUP_CAP, "{}", e.dedup.len());
+        assert!(e.dedup_evicted > 0);
+        assert!(e.duplicate(&ev(DEDUP_CAP * 2 - 1)), "the newest are kept");
     }
 
     #[test]

@@ -129,7 +129,9 @@ uids = []
 [actions]
 kill_grace = "5s"                 # SIGTERM → ожидание → SIGKILL
 max_kills_per_hour = 10           # «предохранитель»: не более N убийств в час
-max_actions_per_hour = 120        # и не более N разрушающих действий вообще
+max_actions_per_hour = 120        # и не более N разрушающих действий (кроме block_ip — у неё свой лимит)
+containment_reserve = 20          # последние N из них — только для kill/stop/quarantine/freeze:
+                                  # хуки и очистки не могут израсходовать бюджет сдерживания
 cooldown = "1m"                   # одно и то же действие над тем же объектом — не чаще
 quarantine_dir = "/var/lib/warden/quarantine"
 snapshot_dir = "/var/lib/warden/snapshots"
@@ -145,6 +147,11 @@ set_v6 = "blocklist6"
 default_ttl = "1h"                # блокировки истекают в ядре сами
 allowlist = ["127.0.0.0/8", "::1/128"]   # ДОБАВЬТЕ сюда свои админские сети!
 max_blocked = 50000
+max_blocks_per_hour = 10000       # свой часовой лимит блокировок: ротация адресов атакующим
+                                  # не расходует бюджет kill/quarantine
+protect_ssh_sessions = true       # не блокировать адрес с открытой SSH-сессией (кроме улик о самом
+                                  # SSH из journald): поддельная строка лога не отрежет администратора
+ssh_ports = []                    # пусто — из Port/ListenAddress в /etc/ssh/sshd_config (или 22)
 
 # -----------------------------------------------------------------------------
 #  Память: PSI, нехватка памяти, долгий свопинг (зависание сервера)
@@ -171,6 +178,10 @@ repeat = "30s"                    # если всё ещё критично — 
 # держала жертва (анонимная память + swap), останавливает kill до конца эпизода
 # (событие memory.kill_ineffective): память держит tmpfs/shm/ядро, а не процессы.
 max_kills_per_episode = 3
+# Только PSI высокий, а MemAvailable выше порога warning: память не кончилась —
+# задачи ждут подкачки с медленного диска или swap, kill не поможет. По умолчанию
+# kill/stop/freeze тогда не выполняются (снимок и хуки — да).
+act_on_psi_alone = false
 report_oom_kills = true
 on_warning = []
 on_critical = ["snapshot", "kill"]   # жертва — лучший кандидат из рейтинга (wardenctl top)
@@ -505,13 +516,15 @@ on_change = []
 # -----------------------------------------------------------------------------
 [auth]
 enabled = true
-source = "auto"                   # auto | journal | file
+source = "auto"                   # auto (journald, если запущен) | journal | file
 auth_log = "/var/log/auth.log"
 ssh_max_failures = 8              # неудачных попыток с одного IP...
 ssh_window = "10m"                # ...за это время → блокировка
 ssh_block = true                  # false: только сообщать; эвристика тоже не заблокирует по этому событию
 ssh_block_ttl = "1h"
 allowlist = []                    # сети, которые никогда не блокируются (плюс actions.firewall.allowlist)
+trust_file = false                # блокировать по строкам файла auth.log: в файле нет отправителя,
+                                  # любой локальный пользователь пишет туда `logger -t sshd ...`
 alert_root_login = true
 alert_sudo_failure = true
 alert_account_changes = true      # useradd/usermod (группа sudo!), удаление, смена пароля
@@ -539,6 +552,8 @@ trusted_writers = ["git", "rsync", "composer", "npm", "yarn", "pnpm", "dpkg", "a
 trusted_users = []                # пусто = любой пользователь, кроме веб-аккаунтов
 correlate_window = "30s"          # окно поиска запроса в access.log вокруг изменения
 block_attackers = true            # блокировать IP, обращающиеся к помеченным файлам
+trust_writable_logs = false       # ...и когда access-log может писать веб-пользователь (вебшелл
+                                  # допишет строку с любым адресом); иначе — только событие и баллы
 kill_writer = true                # убивать веб-воркер, записавший вредоносный код
 
 # Пример сайта (добавляйте свои в conf.d/*.toml):
@@ -561,7 +576,7 @@ kill_writer = true                # убивать веб-воркер, запи
 # настойчивых атакующих в nftables, повышает их эвристический счёт и
 # связывает IP с подброшенными файлами (FIM: «нулевой пациент»).
 [waf]
-enabled = true                    # работает, только если указан хотя бы один [[waf.log]]
+enabled = true                    # работает, если указан [[waf.log]] или discover нашёл логи ModSecurity
 block_after = 5                   # заблокированных запросов с одного IP...
 window = "10m"                    # ...за это время → блокировка IP
 block = true
@@ -569,11 +584,23 @@ block_ttl = "1h"
 count_detection_only = false      # учитывать срабатывания в режиме DetectionOnly
 min_rule_severity = "critical"    # emergency|alert|critical|error|warning|notice
 ignore_rules = []                 # ID правил CRS с ложными срабатываниями
+discover = true                   # сам находить логи ModSecurity в конфигурации Apache/nginx/Angie
+                                  # (по сайтам; см. wardenctl waf discover)
+trust_writable_logs = true        # блокировать и по логу, который может писать веб-пользователь
+                                  # (nginx на Debian пишет логи от www-data); такие события
+                                  # помечены log_trust, wardenctl doctor предупреждает
 
 # [[waf.log]]
 # path = "/var/log/apache2/modsec_audit.log"   # SecAuditLog (нативный или JSON — определится сам)
-# format = "auto"                              # auto | json | native | error_log
+# format = "auto"                              # auto | json | native | error_log | concurrent
 # site = "main"                                # связь с [[fim.site]] для корреляции
+# [[waf.log]]
+# path = "/var/log/apache2/*/modsec_audit.log" # по логу на сайт: шаблон, новые сайты подхватываются
+# site = "{1}"                                 # {1} — то, что совпало с первой *
+# [[waf.log]]
+# path = "/var/log/modsec/index"               # SecAuditLogType Concurrent: индекс (SecAuditLog)
+# format = "concurrent"
+# storage_dir = "/var/log/modsec/audit"        # SecAuditLogStorageDir
 # [[waf.log]]
 # path = "/var/log/nginx/error.log"            # nginx + ModSecurity-nginx
 

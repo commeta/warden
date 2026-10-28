@@ -187,8 +187,17 @@ impl ProcRules {
     /// masters run as root and legitimately spawn helpers (piped loggers,
     /// config tests), while request code runs in unprivileged workers
     /// (www-data, a per-site user under suEXEC/mpm-itk/FPM pools…).
+    ///
+    /// Not in an interactive login session: `sudo -u www-data wp plugin
+    /// update` (or `composer`, `artisan`) from SSH runs as a web account
+    /// in the administrator's `session-N.scope`, and is administration,
+    /// not a web worker. Code reached through the web server — a
+    /// webshell — lives in the server's or FPM's service cgroup and cannot
+    /// leave it; cron jobs of a web account (`system.slice/cron.service`)
+    /// still count. (The 0.14.1 lab logged 85 `web_spawn` warnings from
+    /// test commands run as `nobody` in an SSH session.)
     pub fn is_web_parent(&self, p: &Observed) -> bool {
-        self.web_users.contains(&p.parent_user)
+        (self.web_users.contains(&p.parent_user) && !p.cgroup.as_deref().is_some_and(in_login_session))
             || (self.web_comms.is_match(&p.parent_comm)
                 && p.parent_euid != 0
                 && p.parent_cgroup.as_deref().is_some_and(|c| c.starts_with("/system.slice/") || c.contains(".slice/")))
@@ -218,6 +227,13 @@ impl ProcRules {
 }
 
 /// Everything known about a process at the time of analysis.
+/// Is a cgroup path an interactive login session
+/// (`/user.slice/user-1000.slice/session-5.scope`)?
+pub fn in_login_session(cgroup: &str) -> bool {
+    cgroup.starts_with("/user.slice/")
+        && cgroup.rsplit('/').next().is_some_and(|l| l.starts_with("session-") && l.ends_with(".scope"))
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Observed {
     pub info: ProcInfo,
@@ -1784,6 +1800,21 @@ mod tests {
             "www-data",
         );
         assert!(kinds(&a.on_exec(&o, None)).contains(&"security.web_spawn"));
+    }
+
+    /// An administrator's `sudo -u www-data …` in an SSH session is not a
+    /// web worker; the same tree in the PHP-FPM service is.
+    #[test]
+    fn a_web_account_in_a_login_session_is_administration() {
+        let mut a = ProcessAnalyzer::new(&ProcessConfig::default());
+        let mut o = obs("id", "/usr/bin/id", "id -u", 33, 33, "www-data", "sh", 33, "www-data");
+        o.cgroup = Some("/user.slice/user-1000.slice/session-5.scope".into());
+        assert!(!kinds(&a.on_exec(&o, None)).contains(&"security.web_spawn"));
+        // cron jobs of the web account still count
+        o.cgroup = Some("/system.slice/cron.service".into());
+        assert!(kinds(&a.on_exec(&o, None)).contains(&"security.web_spawn"));
+        assert!(in_login_session("/user.slice/user-0.slice/session-c1.scope"));
+        assert!(!in_login_session("/user.slice/user-1000.slice/user@1000.service/app.slice/x.scope"));
     }
 
     /// A notification command running as `nobody` (one of the default

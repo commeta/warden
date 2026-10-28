@@ -48,11 +48,55 @@ pub struct Heuristics {
     cfg: HeuristicsConfig,
     procs: HashMap<(i32, u64), Entry>,
     ips: HashMap<IpAddr, Entry>,
+    /// Expiry runs when a table grows past its mark (doubling after each
+    /// pass), never on every event: before 0.14.2 the address table was
+    /// not expired at all unless the process table was large (N3).
+    procs_gc_at: usize,
+    ips_gc_at: usize,
+    evicted: u64,
 }
+
+/// Entries per table at most; past it the lowest scores are forgotten.
+const MAX_ENTRIES: usize = 50_000;
+const GC_MIN: usize = 4096;
 
 impl Heuristics {
     pub fn new(cfg: &HeuristicsConfig) -> Self {
-        Self { cfg: cfg.clone(), procs: HashMap::new(), ips: HashMap::new() }
+        Self {
+            cfg: cfg.clone(),
+            procs: HashMap::new(),
+            ips: HashMap::new(),
+            procs_gc_at: GC_MIN,
+            ips_gc_at: GC_MIN,
+            evicted: 0,
+        }
+    }
+
+    /// (processes, addresses, entries evicted by the cap)
+    pub fn table_sizes(&self) -> (usize, usize, u64) {
+        (self.procs.len(), self.ips.len(), self.evicted)
+    }
+
+    /// Expire decayed entries when a table has grown; cap both tables.
+    fn housekeeping(&mut self, now: Instant) {
+        let hl = self.cfg.half_life;
+        if self.procs.len() > self.procs_gc_at {
+            self.procs.retain(|_, e| e.decayed(now, hl) >= 1.0);
+            self.procs_gc_at = (self.procs.len() * 2).clamp(GC_MIN, MAX_ENTRIES);
+        }
+        if self.ips.len() > self.ips_gc_at {
+            self.ips.retain(|_, e| e.decayed(now, hl) >= 1.0);
+            self.ips_gc_at = (self.ips.len() * 2).clamp(GC_MIN, MAX_ENTRIES);
+        }
+        let keep = MAX_ENTRIES - MAX_ENTRIES / 10;
+        // score in tenths, as the thresholds compare it
+        let rank = |e: &Entry| (e.decayed(now, hl) * 10.0) as i64;
+        if self.procs.len() > MAX_ENTRIES {
+            self.evicted += warden_core::ratelimit::evict_lowest(&mut self.procs, keep, rank) as u64;
+        }
+        if self.ips.len() > MAX_ENTRIES {
+            self.evicted += warden_core::ratelimit::evict_lowest(&mut self.ips, keep, rank) as u64;
+        }
     }
 
     pub fn set_config(&mut self, cfg: &HeuristicsConfig) {
@@ -192,9 +236,7 @@ impl Heuristics {
                 );
             }
         }
-        if self.procs.len() > 50_000 {
-            self.gc(now);
-        }
+        self.housekeeping(now);
         out
     }
 
@@ -202,6 +244,8 @@ impl Heuristics {
         let hl = self.cfg.half_life;
         self.procs.retain(|_, e| e.decayed(now, hl) >= 1.0);
         self.ips.retain(|_, e| e.decayed(now, hl) >= 1.0);
+        self.procs_gc_at = (self.procs.len() * 2).clamp(GC_MIN, MAX_ENTRIES);
+        self.ips_gc_at = (self.ips.len() * 2).clamp(GC_MIN, MAX_ENTRIES);
     }
 
     pub fn view(&self, now: Instant) -> Vec<ScoreView> {

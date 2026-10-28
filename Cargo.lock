@@ -1227,7 +1227,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "warden-core"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "globset",
  "humantime",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "warden-detect"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "blake3",
  "libc",
@@ -1260,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "warden-fuzz"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "serde_json",
  "warden-core",
@@ -1270,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "warden-respond"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "blake3",
  "humantime",
@@ -1285,7 +1285,7 @@ dependencies = [
 
 [[package]]
 name = "warden-sys"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "libc",
  "serde",
@@ -1295,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "wardenctl"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1309,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "wardend"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "anyhow",
  "clap",

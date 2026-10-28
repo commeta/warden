@@ -1,115 +1,115 @@
-# Детекторы и справочник событий
+# Detectors & event reference
 
-У каждого события есть точечный `kind`, важность, субъект и структурированные детали.
-Это каталог того, что порождает Warden, и конфигурации, которая этим управляет.
-`[section]` относится к `warden.toml`. Поля `details` каждого события
-и формат журнала — в [events.md](events.md).
+Every event has a dotted `kind`, a severity, a subject and structured details.
+This is the catalogue of what Warden emits and the configuration that governs
+it. `[section]` refers to `warden.toml`. The fields of each event's `details`
+and the journal format are in [events.md](events.md).
 
-## Стабильность
+## Stability
 
-| kind | важность | триггер | конфиг | действие по умолчанию |
+| kind | severity | trigger | config | default action |
 |---|---|---|---|---|
-| `memory.pressure` | warning→critical | PSI memory full avg10, `MemAvailable`, использование свопа, удержанное сверх `sustain`. `top_cgroups` ранжируется по памяти, которую cgroup *закрепляет* (anon + shmem + невытесняемая память ядра), и показывает page cache / освобождаемое отдельно | `[memory]` | `on_critical` (snapshot, kill худшего виновника) |
-| `memory.swap_storm` | critical | устойчивая подкачка (pswpin/out + major faults) с высоким PSI full — «долгий свопинг / сервер висит» | `[memory.swap_storm]` | snapshot, kill |
-| `memory.kill_ineffective` | warning | kill по памяти не поднял `MemAvailable` хотя бы на половину того, что держала жертва (анонимная память + своп — то, что считает ранжирование виновников): память держится tmpfs/разделяемой памятью/ядровым slab, и kill'ы прекращаются до конца эпизода. Удачные kill'ы ограничены `max_kills_per_episode` (3) | `[memory]` | — |
-| `memory.oom_kill` / `kernel.oom_kill` | warning | сработал OOM-killer ядра; называет сервис/контейнер, когда исчерпан его собственный лимит cgroup | `[kernel] on_oom_kill` | snapshot |
-| `cpu.pressure` | warning→critical | PSI cpu avg60, нагрузка/CPU, iowait, задачи в D-состоянии | `[cpu]` | `on_critical` |
-| `cpu.fork_storm` | warning | скорость создания процессов (fork-бомба) | `[cpu] fork_rate_warning` | — |
-| `process.cpu_hog` | warning | один процесс ≥`hog_percent` в течение `hog_duration` | `[cpu]` | — |
-| `io.pressure` | warning→critical | PSI io full avg10; называет топ процессов по I/O | `[io]` | `on_critical` |
-| `system.stall` | warning→critical | собственный планировщик демона проснулся поздно (зависание всего хоста) | `[stall]` | snapshot |
-| `disk.space` | warning→critical | использование файловой системы; перечисляет удалённые-но-открытые файлы и самые большие файлы (собираются за 1 с, чтобы алерт и его очистка не ждали; `largest_files_partial`, когда оборвано). Напоминания с back-off'ом (15м, 30м, 1ч … 24ч), если использование не выросло на пункт; запуск очистки, освободивший < 1% (минимум 256 МиБ), ставит плейбук на паузу с тем же backoff'ом (`cleanup_skipped`); эта история сохраняется в `disk-cleanups.json`, так что рестарт или reload не повторяет бесполезную очистку. Плейбук ходит по дескрипторам каталогов и никогда не идёт по симлинку ниже корня (каталог, подменённый на симлинк во время обхода, не может перенаправить удаление); шаг `/tmp` по умолчанию стареет файлы как `systemd-tmpfiles` (`age_from = "newest"`: самая свежая из atime/mtime/ctime) и пропускает каталоги `PrivateTmp`, X-блокировки и сокеты (`exclude`) | `[disk]` | плейбук `cleanup` |
-| `disk.usage_report` | notice | «кто занимает диск»: очистка освободила (почти) ничего, или у критической точки монтирования нечего чистить (критическая точка монтирования запускает обход сразу) → ограниченный фоновый `du -x` (одна файловая система, idle-приоритет I/O, с пейсингом по давлению I/O — `[daemon.pacing]`, память ограничена, каким бы ни было дерево, `usage_report_max_entries` / `usage_report_max_time`): самые большие каталоги на двух уровнях, самые большие файлы, `not_found_by_walk` (удалённые-но-открытые файлы, данные под точками монтирования, снапшоты). Не чаще раза в сутки на точку монтирования (`usage_report_every`); последующие напоминания `disk.space` несут `biggest_dirs` | `[disk]` | — |
-| `disk.inodes` | warning→critical | исчерпание inode'ов | `[disk]` | — |
-| `disk.readonly` | critical | rw-файловая система перемонтирована в read-only (ошибки I/O) | `[disk]` | snapshot |
-| `disk.fill_prediction` | warning | линейная проекция говорит, что точка монтирования заполнится в пределах `horizon` | `[disk]` | — |
-| `limits.file_handles` / `.pids` / `.conntrack` | warning→critical | системные ресурсные лимиты | `[limits]` | рост `sysctl` при `[tuning] auto_grow` |
-| `limits.process_fds` | warning | один процесс близок к своему `RLIMIT_NOFILE` | `[limits]` | — |
-| `network.listen_overflow` / `.syn_flood` / `.retransmits` / `.iface_errors` | warning | счётчики TCP/интерфейса | `[network]` | — |
-| `process.zombies` / `.uninterruptible` | warning | накопление зомби / долгое D-состояние | `[limits]`, `[process]` | — |
-| `systemd.unit_failed` | warning→critical | юнит вошёл в `failed` — мгновенно через D-Bus (`detected_by: dbus`), или опросом `systemctl` каждые `interval`, когда системная шина недоступна (`detected_by: systemctl`); critical, когда бюджет авто-рестартов исчерпан. Восстановление (`info` + `resolved`) сообщается, когда юнит устаканился (`active`, `inactive`, `reloading`); упавший юнит, который лишь снова запускается (таймер, авто-рестарт), остаётся failed до конца этого прогона | `[systemd]` | опциональный `restart_unit` |
-| `health.down` | critical | проба HTTP/TCP/командой провалилась `failures` раз подряд (зависший сервис) | `[[health.check]]` | snapshot + `restart_unit`, когда задан `unit` |
-| `process.limit_exceeded` | warning | правило `[[process.limit]]`: устойчивый CPU, время жизни или RSS выше лимита | `[[process.limit]]` | на правило (`throttle`, `kill`, `limit_unit`…) |
-| `tuning.advice` | notice | sysctl или настройка ядра не подходит железу или нагрузке | `[tuning]` | нет (совет); ёмкостные лимиты растут с `auto_grow` |
-| `waf.hit` | info | ModSecurity заблокировала запрос (≤1 событие на IP в минуту) | `[waf]` | — |
-| `hardware.memory_corrected` / `_uncorrected` | warning / critical | ошибки ECC EDAC | `[hardware]` | — |
-| `hardware.temperature` | warning→critical | термозоны | `[hardware]` | — |
-| `system.clock_unsynchronized` | warning | 15 минут: флаг синхронизации ядра выключен (то, что показывает `timedatectl`) или оценка ошибки NTP-демона превышает `clock_max_error`. `maxerror` ядра экспортируется только как метрика: оно растёт на 500 мкс/с между опросами NTP на здоровых хостах | `[hardware]` | — |
-| `kernel.*` | notice→critical | `/dev/kmsg`: oops, hung task, soft/hard lockup, RCU stall, ошибки fs/io, MCE, conntrack-full… | `[kernel]` | на правило |
-| `kernel.taint` / `security.kernel_module_loaded` | warning | флаги taint изменились / загружен модуль | `[kernel]` | — |
+| `memory.pressure` | warning→critical | PSI memory full avg10, `MemAvailable`, swap usage sustained past `sustain`. `top_cgroups` is ranked by memory a cgroup *pins* (anon + shmem + unreclaimable kernel memory) and shows page cache / reclaimable separately | `[memory]` | `on_critical` (snapshot, kill worst culprit; process actions only when `MemAvailable` is below the warning threshold, unless `act_on_psi_alone`) |
+| `memory.swap_storm` | critical | sustained paging (pswpin/out + major faults) with high PSI full — "long swapping / server hangs" | `[memory.swap_storm]` | snapshot, kill |
+| `memory.kill_ineffective` | warning | a memory kill did not raise `MemAvailable` by at least half of what the victim held (anonymous memory + swap — what the culprit ranking counts): the memory is held by tmpfs/shared memory/kernel slab, and kills stop until the episode ends. Kills that do help are capped by `max_kills_per_episode` (3) | `[memory]` | — |
+| `memory.oom_kill` / `kernel.oom_kill` | warning | kernel OOM killer fired; names the service/container when its own cgroup limit was hit | `[kernel] on_oom_kill` | snapshot |
+| `cpu.pressure` | warning→critical | PSI cpu avg60, load/CPU, iowait, D-state tasks | `[cpu]` | `on_critical` |
+| `cpu.fork_storm` | warning | process-creation rate (fork bomb) | `[cpu] fork_rate_warning` | — |
+| `process.cpu_hog` | warning | one process ≥`hog_percent` for `hog_duration` | `[cpu]` | — |
+| `io.pressure` | warning→critical | PSI io full avg10; names top I/O processes | `[io]` | `on_critical` |
+| `system.stall` | warning→critical, or notice on a VM | the daemon's own scheduler woke up late (whole-host freeze). On a virtual machine, a delay explained by hypervisor steal time, or one with no pressure inside the guest (a paused VM), is a notice without a snapshot (`cause`: `host`, `hypervisor_steal`, `vm_paused`) | `[stall]` | snapshot (cause `host`) |
+| `disk.space` | warning→critical | filesystem usage; lists deleted-but-open files and biggest files (gathered within 1 s so the alert and its cleanup do not wait; `largest_files_partial` when cut short). Reminders back off (15m, 30m, 1h … 24h) unless usage grows by a point; a cleanup run that freed < 1% (min. 256 MiB) pauses the playbook with the same backoff (`cleanup_skipped`); that history is saved in `disk-cleanups.json`, so a restart or reload does not repeat a useless cleanup. The playbook walks over directory descriptors and never follows a symlink below a root (a directory swapped for a symlink mid-walk cannot redirect a deletion); the default `/tmp` step ages files like `systemd-tmpfiles` (`age_from = "newest"`: the newest of atime/mtime/ctime) and skips `PrivateTmp` directories, X server locks and sockets (`exclude`) | `[disk]` | `cleanup` playbook |
+| `disk.usage_report` | notice | "who is using the disk": the cleanup freed (almost) nothing, or a critical mount has nothing to clean (a critical mount starts the walk at once) → bounded background `du -x` (one filesystem, idle I/O priority, paced by I/O pressure — `[daemon.pacing]`, memory bounded whatever the tree looks like, `usage_report_max_entries` / `usage_report_max_time`): biggest directories on two levels, largest files, `not_found_by_walk` (deleted-but-open files, data under mount points, snapshots). At most once per mount per `usage_report_every`; later `disk.space` reminders carry `biggest_dirs` | `[disk]` | — |
+| `disk.inodes` | warning→critical | inode exhaustion | `[disk]` | — |
+| `disk.readonly` | critical | rw filesystem remounted read-only (I/O errors) | `[disk]` | snapshot |
+| `disk.fill_prediction` | warning | linear projection says the mount fills within `horizon` | `[disk]` | — |
+| `limits.file_handles` / `.pids` / `.conntrack` | warning→critical | system-wide resource limits | `[limits]` | `sysctl` growth with `[tuning] auto_grow` |
+| `limits.process_fds` | warning | one process near its `RLIMIT_NOFILE` | `[limits]` | — |
+| `network.listen_overflow` / `.syn_flood` / `.retransmits` / `.iface_errors` | warning | TCP/interface counters | `[network]` | — |
+| `process.zombies` / `.uninterruptible` | warning | zombie pile-up / long D-state | `[limits]`, `[process]` | — |
+| `systemd.unit_failed` | warning→critical | a unit entered `failed` — instantly over D-Bus (`detected_by: dbus`), or by polling `systemctl` every `interval` when the system bus is unavailable (`detected_by: systemctl`); critical when the auto-restart budget is exhausted. Recovery (`info` + `resolved`) is reported when the unit settles (`active`, `inactive`, `reloading`); a failed unit that is only starting again (a timer, an auto-restart) stays failed until that run ends | `[systemd]` | optional `restart_unit` |
+| `health.down` | critical | an HTTP/TCP/command probe failed `failures` times in a row (hung service) | `[[health.check]]` | snapshot + `restart_unit` when `unit` is set |
+| `process.limit_exceeded` | warning | a `[[process.limit]]` rule: sustained CPU, lifetime or RSS over the limit | `[[process.limit]]` | per rule (`throttle`, `kill`, `limit_unit`…) |
+| `tuning.advice` | notice | a sysctl/kernel setting does not fit the hardware or workload | `[tuning]` | none (advice); capacity limits grow with `auto_grow` |
+| `waf.hit` | info | ModSecurity blocked a request (≤1 event per IP per minute) | `[waf]` | — |
+| `hardware.memory_corrected` / `_uncorrected` | warning / critical | EDAC ECC errors | `[hardware]` | — |
+| `hardware.temperature` | warning→critical | thermal zones | `[hardware]` | — |
+| `system.clock_unsynchronized` | warning | for 15 min: the kernel's sync flag is off (what `timedatectl` shows) or the NTP daemon's estimated error exceeds `clock_max_error`. The kernel's `maxerror` is only exported as a metric: it grows 500 µs/s between NTP polls on healthy hosts | `[hardware]` | — |
+| `kernel.*` | notice→critical | `/dev/kmsg`: oops, hung task, soft/hard lockup, RCU stall, fs/io errors, MCE, conntrack-full… | `[kernel]` | per-rule |
+| `kernel.taint` / `security.kernel_module_loaded` | warning | taint flags change / module loaded | `[kernel]` | — |
 
-## Вторжения и целостность
+## Intrusion & integrity
 
-| kind | важность | триггер | действие по умолчанию |
+| kind | severity | trigger | default action |
 |---|---|---|---|
-| `security.privilege_escalation` | critical | root-процесс, чей не-root-родитель не является известным брокером; `setuid(0)` программой, никогда не имевшей root | stop, snapshot |
-| `security.unknown_suid_exec` | critical | euid 0 для не-root-пользователя через SUID-бинарник, которого нет в allowlist | stop |
-| `security.fileless_exec` | critical | запуск из `memfd:` или из образа, удалённого из записываемого места (`/tmp`, `/dev/shm`, home, корни сайтов). Контейнерные рантаймы (runc, crun, …) законно переисполняются из memfd: это освобождается, только когда образ рантайма запущен доверенным системным бинарником (или рантаймом того же пользователя), никогда из-за имени | stop |
-| `process.stale_binary` | notice | бинарник заменён на диске (обновление пакета), пока процесс работает со старым; подсказка называет юнит для перезапуска | — |
-| `process.deleted_binary` | warning | бинарник удалён из системного пути и не заменён | — |
-| `security.reverse_shell` | critical | shell с stdin/stdout на TCP-сокете | kill |
-| `security.miner` / `security.miner_port` | critical / warning | известные имена майнеров, или загрузка CPU + порт майнинг-пула | kill |
-| `security.masquerade` | critical | пользовательский процесс, замаскированный под поток `[kernel]` (системный бинарник под root, чьё имя лишь напоминает одно из них, вроде `/usr/sbin/watchdog`, не сообщается) | — |
-| `security.web_spawn` | warning→critical | веб-воркер (php-fpm/node/…, не-root) породил shell или инструмент; critical при красных флагах загрузчика/reverse shell | kill (при красных флагах) |
-| `security.db_spawn` | warning→critical | сервер БД (mysqld, postgres, redis…) породил shell или инструмент — SQLi→RCE | kill (при красных флагах) |
-| `security.waf_attack` | warning | один IP заблокирован ModSecurity `block_after` раз в пределах `window` | block_ip |
-| `security.exec_from_writable` | notice→critical | запуск бинарника/скрипта из записываемого/upload-каталога | — |
-| `security.ld_preload` | warning | привилегированный/веб-процесс с подозрительным `LD_PRELOAD` | — |
-| `security.ptrace` | notice→warning | не-отладчик присоединился через ptrace (инъекция кода) | — |
-| `security.new_lineage` | notice | сервис/веб-учётная запись запустила программу, никогда не виденную во время обучения | — |
-| `security.ssh_bruteforce` | warning | повторяющиеся SSH-неудачи аутентификации с одного IP | block_ip |
-| `security.bruteforce_success` | critical | успешный логин после всплеска неудач | — |
-| `security.web_user_sudo` | critical | веб-учётная запись использовала sudo | — |
-| `auth.root_login` / `auth.sudo_failure` / `auth.privileged_group` / `auth.account_created` … | info→critical | события auth-log/journald | — |
-| `security.uid0_account` | critical | появилась новая учётная запись с uid 0 | — |
-| `security.webshell` | warning→critical | сигнатуры пометили файл сайта (оценка ≥ `fim.alert_score`) | quarantine, restart пула |
-| `security.malicious_writer` | critical | веб-воркер, записавший помеченный файл; при массовом изменении (`fim.mass_change`) — только писатели, чьи собственные записи в окне совпали с сигнатурами; всплеск чистых изменений (обновление CMS) никого не убивает | kill |
-| `security.webshell_access` | critical | запрос попал в помеченный файл (кто-то использует шелл) | block_ip |
-| `security.new_suid` | info→critical | новый SUID/SGID-файл: в реальном времени через метки файловой системы fanotify (`detected_by: real time (fanotify)`), или обходом (`integrity.suid_rescan`, после переполнения, на ядрах без `FAN_REPORT_DFID_NAME`). Critical в записываемых местах, info, когда файл подтверждён dpkg | — |
-| `security.binary_replaced` / `security.sudoers_changed` / `security.persistence_*` / `security.ssh_key_added` / `security.ld_so_preload` | notice→critical | изменения baseline критических файлов | — |
-| `security.new_listener` / `security.bind_shell` | notice→critical | новый слушающий сокет (шеллоподобные ⇒ critical) | — |
-| `security.lsm_disabled` | critical | AppArmor выключен / SELinux → permissive во время работы | — |
-| `heuristics.suspicious` / `heuristics.contain` / `heuristics.ip_threshold` | warning→critical | накопленная подозрительность перешла порог | `on_contain` / block_ip |
+| `security.privilege_escalation` | critical | root process whose non-root parent is not a known broker; `setuid(0)` by a program that never had root | stop, snapshot |
+| `security.unknown_suid_exec` | critical | euid 0 for a non-root user via a SUID binary not in the allowlist | stop |
+| `security.fileless_exec` | critical | execution from `memfd:`, or from an image deleted from a writable location (`/tmp`, `/dev/shm`, home, web roots). Container runtimes (runc, crun, …) legitimately re-exec from a memfd: that is exempt only for a runtime image started by a trusted system binary (or by a runtime of the same user), never because of a name | stop |
+| `process.stale_binary` | notice | the binary was replaced on disk (package upgrade) while the process runs the old one; the hint names the unit to restart | — |
+| `process.deleted_binary` | warning | the binary was removed from a system path and not replaced | — |
+| `security.reverse_shell` | critical | shell with stdin/stdout on a TCP socket | kill |
+| `security.miner` / `security.miner_port` | critical / warning | known miner names, or CPU burn + mining-pool port | kill |
+| `security.masquerade` | critical | userspace process disguised as a `[kernel]` thread (a root-owned system binary whose name merely resembles one, like `/usr/sbin/watchdog`, is not reported) | — |
+| `security.web_spawn` | warning→critical | web worker (php-fpm/node/…, non-root) spawning a shell or tool; critical with downloader/reverse-shell red flags. A web account in an interactive login session (`sudo -u www-data …` over SSH) is administration, not a worker | kill (on red flags) |
+| `security.db_spawn` | warning→critical | database server (mysqld, postgres, redis…) spawning a shell or tool — SQLi→RCE | kill (on red flags) |
+| `security.waf_attack` | warning | one IP blocked by ModSecurity `block_after` times within `window`; `log_trust` when a web user can write the log | block_ip (not from a web-writable log with `waf.trust_writable_logs = false`) |
+| `security.exec_from_writable` | notice→critical | execution of a binary/script from a writable/upload location | — |
+| `security.ld_preload` | warning | privileged/web process with a suspicious `LD_PRELOAD` | — |
+| `security.ptrace` | notice→warning | a non-debugger attached ptrace (code injection) | — |
+| `security.new_lineage` | notice | a service/web account ran a program never seen during learning | — |
+| `security.ssh_bruteforce` | warning | repeated SSH auth failures from one IP (journald; lines from the auth.log *file* do not block unless `auth.trust_file`) | block_ip |
+| `security.bruteforce_success` | critical | a successful login after a burst of failures | — |
+| `security.web_user_sudo` | critical | a web account used sudo | — |
+| `auth.root_login` / `auth.sudo_failure` / `auth.privileged_group` / `auth.account_created` … | info→critical | auth-log/journal events | — |
+| `security.uid0_account` | critical | a new uid-0 account appeared | — |
+| `security.webshell` | warning→critical | signatures flagged a site file (score ≥ `fim.alert_score`) | quarantine, restart pool |
+| `security.malicious_writer` | critical | the web worker that wrote the flagged file; in a mass change (`fim.mass_change`), only writers whose own writes in the window matched the signatures — a burst of clean changes (a CMS update) kills nobody | kill |
+| `security.webshell_access` | critical | a request hit a flagged file (someone using the shell) | block_ip (not from a web-writable access log unless `fim.trust_writable_logs`) |
+| `security.new_suid` | info→critical | a new SUID/SGID file: in real time via fanotify filesystem marks (`detected_by: real time (fanotify)`), or by the walk (`integrity.suid_rescan`, after an overflow, on kernels without `FAN_REPORT_DFID_NAME`). Critical in writable locations, info when dpkg verifies the file | — |
+| `security.binary_replaced` / `security.sudoers_changed` / `security.persistence_*` / `security.ssh_key_added` / `security.ld_so_preload` | notice→critical | integrity baseline changes to critical files | — |
+| `security.new_listener` / `security.bind_shell` | notice→critical | a new listening socket (shell-like ⇒ critical) | — |
+| `security.lsm_disabled` | critical | AppArmor disabled / SELinux → permissive at runtime | — |
+| `heuristics.suspicious` / `heuristics.contain` / `heuristics.ip_threshold` | warning→critical | accumulated suspicion crossed a threshold | `on_contain` / block_ip |
 
-### Как анализируются exec-события
+### How exec events are analysed
 
-Каждый `exec` на хосте (proc connector) анализируется по правилам
-выше. Сочетание (имя и uid родителя, исполняемый файл, uid ребёнка), прошедшее
-полный анализ три раза, идёт **быстрым путём** (`process.exec_fast_path`):
-одно чтение `/proc/<pid>/status` и readlink `exe`, родитель из кеша.
-Быстрый путь всё равно проверяет скрипты, запускаемые из записываемых мест (оболочки
-и интерпретаторы, каждый exec), и LD_PRELOAD root-процессов (каждый четвёртый
-exec), и каждый `process.exec_recheck_every`-й exec (16-й) всё равно получает полный
-анализ. Сочетания с веб- или СУБД-родителем, веб-пользователем,
-сменой uid (sudo/su/setuid-бинарники), удалённым, memfd- или записываемым
-исполняемым файлом или именем «под поток ядра» всегда анализируются полностью, и
-находка сбрасывает сочетание. Задайте `exec_fast_path = false`, чтобы анализировать
-каждый exec полностью.
+Every `exec` on the host (proc connector) is analysed against the rules
+above. A (parent name and uids, executable, uids) combination that passed
+the full analysis three times takes a **fast path** (`process.exec_fast_path`):
+one `/proc/<pid>/status` read and an `exe` readlink, the parent from a cache.
+The fast path still checks scripts started from writable locations (shells
+and interpreters, every exec) and LD_PRELOAD of root processes (one exec in
+four), and every `process.exec_recheck_every`-th exec (16) gets the full
+analysis anyway. Combinations involving a web or database parent, a web
+user, a uid change (sudo/su/setuid binaries), a deleted, memfd or writable
+executable, or a kernel-thread-like name are always fully analysed, and a
+finding resets the combination. Set `exec_fast_path = false` to analyse
+every exec in full.
 
-## Эвристический скоринг
+## Heuristic scoring
 
-Каждая находка `security.*` добавляет очки (`[heuristics.weights]`) процессу-субъекту
-и/или IP. Оценки затухают с периодом полураспада (`half_life`). Процесс, перешедший
-`alert_score`, поднимает `heuristics.suspicious`; перешедший `contain_score` —
-поднимает `heuristics.contain` (который несёт `on_contain`, по умолчанию stop+snapshot).
-Половина веса каждой находки также течёт к родителю, так что воркер, который продолжает
-порождать подозрительных детей, сам становится целью. Смотрите живые оценки через
+Each `security.*` finding adds points (`[heuristics.weights]`) to the subject
+process and/or IP. Scores decay with a half-life (`half_life`). A process
+crossing `alert_score` raises `heuristics.suspicious`; crossing `contain_score`
+raises `heuristics.contain` (which carries `on_contain`, default stop+snapshot).
+Half of each finding's weight also flows to the parent, so a worker that keeps
+spawning suspicious children becomes a target itself. Inspect live scores with
 `wardenctl scores`.
 
-IP, перешедший `ip_block_score`, поднимает `heuristics.ip_threshold` с
-`block_ip` — если только находка, перешедшая его, не пришла от источника, который
-намеренно не блокирует: `auth.ssh_block = false`, `waf.block = false`,
-`fim.block_attackers = false`, адрес из allowlist, или `[[policy]]`, которая
-сделала событие `alert_only` или отняла у него `block_ip`. Такие события несут
-`ip_block_off` (причину) и всё равно идут в оценку адреса, так что более поздняя
-находка от источника, который блокирует, может запустить блокировку со всеми
-доказательствами. Чтобы не блокировать адреса вообще никогда: `[actions.firewall] enabled =
-false` (`block_ip` тогда получает отказ).
+An IP crossing `ip_block_score` raises `heuristics.ip_threshold` with
+`block_ip` — unless the finding that crossed it comes from a source that
+deliberately does not block: `auth.ssh_block = false`, `waf.block = false`,
+`fim.block_attackers = false`, an allowlisted address, or a `[[policy]]` that
+made the event `alert_only` or took its `block_ip` away. Such events carry
+`ip_block_off` (the reason) and still add to the address's score, so a later
+finding from a source that does block can trigger the block with all the
+evidence. To never block addresses at all: `[actions.firewall] enabled =
+false` (`block_ip` is then refused).
 
-## Тюнинг без правки основного конфига
+## Tuning without editing core config
 
-Используйте правила `[[policy]]` (см. эталонный конфиг), чтобы заглушить заведомо
-безопасный паттерн, понизить шумный детектор до alert-only или добавить более сильное действие на
-конкретный субъект — всё, не трогая пороги детекторов. Прогоните день в
-`dry_run = true` (по умолчанию), просмотрите `wardenctl events`, напишите политики для
-ложных срабатываний, затем включите действия.
+Use `[[policy]]` rules (see the reference config) to silence a known-good
+pattern, downgrade a noisy detector to alert-only, or add a stronger action on
+a specific subject — all without touching detector thresholds. Run a day in
+`dry_run = true` (the default), review `wardenctl events`, write policies for
+the false positives, then enable actions.

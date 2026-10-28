@@ -116,16 +116,22 @@ grep -q 'listen {{LAB_IP}}:80' "$ROOT/guest/config/nginx-site.conf.in" || fail '
 grep -q 'dry_run = true' "$ROOT/guest/20-install-warden.sh" || fail 'Warden dry-run default missing'
 grep -Fq '$ROOT/guest/config/warden-dropin.toml.in' "$ROOT/guest/20-install-warden.sh" || fail 'Warden drop-in path is incorrect'
 if [[ -d "$ROOT/host" ]]; then fail 'obsolete host-side scripts directory remains'; fi
-if grep -RniE 'VirtualBox|VBoxManage|HOSTONLY|HOST_IP|VBOX_|host-only|host-side|host side|хостовая часть|хостовой части|контейнер|container|guest/01-netplan-hostonly|\$ROOT/system/' "$ROOT" --exclude='SHA256SUMS' --exclude='check-kit.sh'; then fail 'legacy virtualization/deployment references remain'; else echo 'OK   no legacy virtualization/deployment references'; fi
+# (run logs in docs/ quote test names such as `cgroup::tests::containers`)
+if grep -RniE 'VirtualBox|VBoxManage|HOSTONLY|HOST_IP|VBOX_|host-only|host-side|host side|хостовая часть|хостовой части|контейнер|container|guest/01-netplan-hostonly|\$ROOT/system/' "$ROOT" --exclude='SHA256SUMS' --exclude='check-kit.sh' --exclude='*.log'; then fail 'legacy virtualization/deployment references remain'; else echo 'OK   no legacy virtualization/deployment references'; fi
 grep -q 'runuser -u www-data -- test -r /etc/warden-lab/db.php' "$ROOT/guest/30-validate.sh" || fail 'DB effective permissions validation missing'
 grep -q 'ACK_WARDEN_ENFORCEMENT=YES' "$ROOT/guest/60-waf-block-test.sh" || fail 'active test acknowledgement missing'
-for required in README.md README_RU.md lab.env.example lib/lab-common.sh docs/FIREWALL-ARCHITECTURE.md docs/TEST-MATRIX.md guest/01-prepare.sh guest/10-install-stack.sh guest/20-install-warden.sh guest/30-validate.sh guest/40-waf-smoke.sh guest/50-longrun-smoke.sh guest/60-waf-block-test.sh guest/config/nft-base-apply.sh.in guest/config/warden-dropin.toml.in guest/systemd/warden-lab-nftables.service; do
+# logrotate fails on a second entry for a file /etc/logrotate.d/apache2 covers
+if grep -Rq '^/var/log/apache2/' "$ROOT/guest" --include='*.sh'; then fail 'kit rotates a file in /var/log/apache2 (duplicates /etc/logrotate.d/apache2)'; else echo 'OK   no duplicate logrotate entry for /var/log/apache2'; fi
+# the audit log must not be writable by the web user
+if grep -q 'chown www-data[^ ]* .*modsec_audit.log' "$ROOT/guest/10-install-stack.sh"; then fail 'modsec_audit.log owned by www-data (forgeable by a webshell)'; else echo 'OK   audit log not owned by www-data'; fi
+for required in README.md lab.env.example lib/lab-common.sh docs/FIREWALL-ARCHITECTURE.md docs/TEST-MATRIX.md guest/01-prepare.sh guest/10-install-stack.sh guest/20-install-warden.sh guest/30-validate.sh guest/40-waf-smoke.sh guest/50-longrun-smoke.sh guest/60-waf-block-test.sh guest/config/nft-base-apply.sh.in guest/config/warden-dropin.toml.in guest/systemd/warden-lab-nftables.service; do
   [[ -f "$ROOT/$required" ]] || fail "missing file: $required"
 done
 
 if command -v shellcheck >/dev/null; then
   printf '\n== ShellCheck ==\n'
-  find "$ROOT" -type f -name '*.sh' -print0 | xargs -0 shellcheck -x || fail 'ShellCheck'
+  # sources are found next to each script; info-level notes are not failures
+  find "$ROOT" -type f -name '*.sh' -print0 | xargs -0 shellcheck -x -P SCRIPTDIR -S warning || fail 'ShellCheck'
 else printf '\nSKIP ShellCheck: executable unavailable\n'; fi
 
 if (( failures )); then printf '\nFAILED: %s check(s)\n' "$failures" >&2; exit 1; fi

@@ -1,5 +1,151 @@
 # Changelog
 
+## 0.14.2
+
+Stage 0 of the 0.14.1 review (docs/reviews/review-0.14.1.ru.md): the P1
+defects, the fuzzing crash, what the 0.14.1 lab journal showed, and
+ModSecurity in any setup. No configuration change is needed; the behaviour
+changes below are on by default and each has a switch.
+
+### Security
+- **A flood of blocks left a compromise uncontained** (N1). One hourly
+  budget (`max_actions_per_hour = 120`) covered every destructive action:
+  an attacker rotating through IPv6 addresses used it up with `block_ip`
+  in seconds, and kill, quarantine and stop were refused for the rest of
+  the hour. `block_ip` now has a budget of its own
+  (`actions.firewall.max_blocks_per_hour = 10000`), and the last
+  `actions.containment_reserve` (20) slots of the shared budget are for
+  containment only — hooks, restarts and cleanups cannot use them. The
+  blocklist size is no longer listed from nft on every block.
+- **A local user could block any address through auth.log** (N4). On
+  Ubuntu with rsyslog, `auth.source = "auto"` read the file, which does not
+  record who wrote a line: `logger -t sshd "Failed password for root from
+  <victim>"` blocked the victim. `auto` now reads journald whenever it runs
+  (it records the sender); lines from the file are evidence but do not
+  block unless `auth.trust_file = true`. `journalctl` is reaped however the
+  reader ends.
+- **Forged web log lines** (N5). A webshell running as the web user could
+  write a line into a log it can write and have Warden block any address —
+  the administrator's included. Warden now checks who can write every WAF
+  and access log (`process.web_users` and their groups, the log's
+  directories too), says so in events (`log_trust`), `wardenctl doctor` and
+  `status`; a request for a flagged file read from a web-writable access
+  log no longer blocks by itself (`fim.trust_writable_logs = false`); and an
+  address with an established SSH session is never blocked on such evidence
+  (`actions.firewall.protect_ssh_sessions = true`; SSH evidence from the
+  journal still blocks it).
+- **A raw byte hid a request from Warden** (N15). The log reader dropped a
+  line that was not valid UTF-8 (and drifted its position): one `\xff` in
+  a logged header made the whole audit record invisible. Lines are now read
+  as bytes and kept with bad bytes replaced; a line longer than 320 KiB (a
+  request body in the audit log) keeps its head and tail, and a JSON record
+  cut across its structure is salvaged field by field — padding a request
+  no longer hides it.
+
+### Fixed
+- **A stopping daemon removed its successor's control socket**: started
+  while the old one was still shutting down, the new daemon lost its socket
+  to the old one's cleanup. Only the daemon's own socket file is removed.
+- **Warden killed a process with 69 % of memory free** (N22, the 0.14.1
+  lab). `memory.pressure` became critical on PSI memory full alone, and the
+  default `on_critical` kills; on a slow disk, paging in from swap stalls
+  tasks while memory is plentiful, and the kill freed nothing that helped.
+  Process actions (kill, stop, freeze, throttle) now need MemAvailable below
+  the warning threshold, unless `memory.act_on_psi_alone = true`; the event
+  says why the kill was held back and whether the stall is I/O-bound.
+- **The WAF sensor collapsed under many distinct addresses** (N2). Past
+  50 000 addresses every new one scanned the whole table with a clock read
+  per entry: 120 000 transactions took minutes, and the attack was seen
+  late. The per-address tables are now bounded (N3) — WAF recent hits,
+  the WAF counting window and dedup, SSH failure windows, heuristic scores
+  — with amortised expiry and eviction of the quietest entries first, so a
+  flood of one-off addresses cannot push out a patient attacker's count.
+  Evictions are counted (`warden_state_evicted_total`).
+- **Fuzzing crash** (N6): `parse_kb_value` overflowed on `VmRSS:
+  59999999999991024 kB` (a panic in debug, a wrapped value in release).
+  The input is a regression seed, and `cargo test -p warden-fuzz` now
+  replays every `fuzz/corpus/*/regress-*` on stable.
+- **False "host was unresponsive" on virtual machines** (the 0.14.1 lab: 21
+  in 40 idle hours, 5–21 s each, every one with a snapshot — which pushed
+  the snapshots of real incidents out of the 30 kept). A late wake-up
+  explained by hypervisor steal time, or one on a VM with no pressure inside
+  (a paused VM), is now a notice without a snapshot; `cause`,
+  `steal_seconds` and PSI say why.
+- **`web_spawn` for administrators** (the lab: 85 warnings). A web account
+  in an interactive login session (`sudo -u www-data wp …`, `composer`,
+  `artisan` over SSH) is administration, not a web worker; the server's,
+  FPM's and cron's cgroups still count.
+- **The WAF headline** was the first message of a transaction ("Host header
+  is a numeric IP address") rather than the attack (XSS): it is now the most
+  severe rule that is not an anomaly-score evaluation (CRS 949/959/980).
+- `security.new_suid` for a file removed before it was examined said
+  "(mode )"; it now says "(already removed)".
+- **Upgrades could leave the host unprotected** (N12): `install.sh`
+  restarted the service and only then warned that the configuration did not
+  validate. The new binary now validates the configuration in place before
+  anything is replaced (`--force` to install anyway, without a restart);
+  the previous binaries are kept as `*.old` and put back if the restarted
+  service does not come up.
+
+### ModSecurity in any setup
+- **One log per site**: `[[waf.log]] path` may be a glob
+  (`/var/log/apache2/*/modsec_audit.log`); `site = "{1}"` names each after
+  what `*` matched; new sites are picked up within 30 s, a new log is read
+  from its first line, a rotated one is not dropped.
+- **`SecAuditLogType Concurrent`** (`format = "concurrent"`): the index
+  names a file per transaction below `storage_dir`; without an index (piped
+  to `mlogc`) the storage directory is scanned. Files are opened below the
+  storage directory without following symlinks, only regular files of at
+  most 4 MiB, in batches of 2000 — a backlog is read without the pause
+  between polls and never skipped.
+- **Discovery** (`waf.discover = true`): the logs Apache, nginx and Angie are
+  configured to write — `SecAuditLog` per virtual host, JSON or native,
+  concurrent storage, and the error log where the audit log is piped away,
+  off, or without part H — are followed without configuration and re-read
+  every five minutes. `wardenctl waf discover` prints them as `[[waf.log]]`
+  entries; `wardenctl doctor` lists them and warns about logs a web user can
+  write; `wardenctl status` lists the logs the daemon follows. Only root's
+  configuration files are read. Configured logs are opened before discovery
+  runs, so nothing written right after the start is missed.
+- **Checked against real builds** — Apache 2.4.58 with ModSecurity 2.9.7
+  and nginx 1.24 with libmodsecurity 3.0.12 (Ubuntu 24.04, CRS 3.3.5), six
+  sites in every mode (serial native, JSON per site, concurrent, error log),
+  each attacked from its own address: every one gave its `waf.hit` and
+  `security.waf_attack`. What that turned up, fixed: libmodsecurity 3's
+  native records (`ModSecurity:` lines in section H) carried no rules, and
+  ModSecurity 2's `Apache-Error:` copies were taken for separate hits whose
+  dedup slot then hid the real record — the serial logs of both engines
+  produced no event at all; ModSecurity 2.9.6+ puts a user directory above
+  the days of a concurrent log; libmodsecurity 3 writes absolute paths and a
+  fractional length into its index. The records are test fixtures
+  (`crates/warden-detect/testdata/modsecurity`) and fuzzing seeds. Events
+  carry the request's `host`; the server-wide log is no longer labelled
+  `site = "default"`.
+- **A request body could forge an audit record.** Part `I` logs the body
+  verbatim; a body holding `--x-Z--` and a made-up `--y-A--` record for
+  another address ended the real record and was read as a transaction from
+  that address — on Debian's default `SecAuditLogParts ABIJDEFHZ`. Inside a
+  record only boundaries with its own (random) id count now; a record cut by
+  a crash is given up after 30 s.
+- **Concurrent entries are checked against their index.** Both engines
+  write the entry's MD5 into the index line through the descriptor root
+  opened; the entry sits where the workers — and a webshell — can write.
+  An entry that does not match is ignored and reported
+  (`security.waf_log_tampered`), and the address is taken from the index.
+
+### CI
+- The fuzz job is back on: one job per target (a crash no longer hides the
+  rest), a pinned nightly, the corpus grown by earlier runs restored from a
+  cache, a minute per push and pull request and ten minutes every night;
+  crashes are uploaded as `fuzz-crash-<target>`.
+
+### Lab Kit
+- `check-kit.sh` passes again (N20); logrotate no longer fails every night
+  on a second entry for `/var/log/apache2/modsec_audit.log` (all of the
+  host's rotation failed with it); the audit log stays `root:adm` (a
+  `www-data` one could be forged); PHP's error log moved to
+  `/var/log/warden-lab/`.
+
 ## 0.14.1 
 
 Stage 2 of the 0.13.3 code review: packaging, hardening, CI. No

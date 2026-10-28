@@ -473,7 +473,7 @@ pub fn read_info_light(pid: i32) -> io::Result<ProcInfo> {
         ruid: u32::MAX,
         euid: u32::MAX,
         suid: u32::MAX,
-        rss: st.rss_pages * crate::util::page_size(),
+        rss: st.rss_pages.saturating_mul(crate::util::page_size()),
         rss_anon: None,
         rss_shmem: 0,
         swap: 0,

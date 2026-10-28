@@ -102,8 +102,14 @@ impl Handles {
 /// or a record, never while an action runs.
 struct Limits {
     kills: SlidingWindow,
+    /// Destructive actions other than `block_ip`.
     budget: SlidingWindow,
+    /// `block_ip`: its own hour, so a flood of attacker addresses cannot
+    /// leave a compromise uncontained (N1 of the 0.14.1 review).
+    blocks: SlidingWindow,
     cooldown: Cooldown<String>,
+    /// Addresses with an established SSH session, and when that was read.
+    ssh_peers: Option<(Instant, HashSet<IpAddr>)>,
     /// Restarts per unit and hour: the one budget, `systemd.max_restarts_per_hour`.
     unit_restarts: HashMap<String, SlidingWindow>,
     last_snapshot: Option<Instant>,
@@ -111,6 +117,8 @@ struct Limits {
 
 pub struct Responder {
     cfg: ActionsConfig,
+    /// Ports of the local sshd, for `firewall.protect_ssh_sessions`.
+    ssh_ports: Vec<u16>,
     protection: Protection,
     limits: Arc<Mutex<Limits>>,
     max_restarts: usize,
@@ -131,6 +139,23 @@ fn target_key(ev: &Event) -> String {
         Subject::Process(p) => format!("pid:{}:{}", p.pid, p.start_time),
         other => other.to_string(),
     }
+}
+
+fn ssh_ports(a: &ActionsConfig) -> Vec<u16> {
+    if a.firewall.ssh_ports.is_empty() { warden_sys::net::sshd_ports() } else { a.firewall.ssh_ports.clone() }
+}
+
+/// Evidence about SSH itself, read from the journal (which records who
+/// wrote a line): the one kind that may block an address with a live SSH
+/// session — a brute force that succeeded is exactly such an address.
+fn trusted_ssh_evidence(ev: &Event) -> bool {
+    ev.source == "auth" && ev.details.get("log_source").and_then(|v| v.as_str()) == Some("journal")
+}
+
+/// `actions.containment_reserve`, at most a quarter of the hourly budget:
+/// a small budget (a test, a cautious operator) still lets hooks run.
+fn effective_reserve(a: &ActionsConfig) -> usize {
+    a.containment_reserve.min(a.max_actions_per_hour / 4)
 }
 
 /// Did an action really do something (or try to)? Only those count
@@ -169,11 +194,14 @@ impl Responder {
         let a = &cfg.actions;
         Self {
             cfg: a.clone(),
+            ssh_ports: ssh_ports(a),
             protection: Protection::new(&cfg.protection),
             limits: Arc::new(Mutex::new(Limits {
                 kills: SlidingWindow::new(Duration::from_secs(3600), a.max_kills_per_hour),
                 budget: SlidingWindow::new(Duration::from_secs(3600), a.max_actions_per_hour),
+                blocks: SlidingWindow::new(Duration::from_secs(3600), a.firewall.max_blocks_per_hour),
                 cooldown: Cooldown::new(a.cooldown),
+                ssh_peers: None,
                 unit_restarts: HashMap::new(),
                 last_snapshot: None,
             })),
@@ -196,6 +224,7 @@ impl Responder {
     pub fn lane(&self) -> Self {
         Self {
             cfg: self.cfg.clone(),
+            ssh_ports: self.ssh_ports.clone(),
             protection: self.protection.clone(),
             limits: self.limits.clone(),
             max_restarts: self.max_restarts,
@@ -210,12 +239,14 @@ impl Responder {
     pub fn reconfigure(&mut self, cfg: &Config) {
         let a = &cfg.actions;
         self.cfg = a.clone();
+        self.ssh_ports = ssh_ports(a);
         self.protection = Protection::new(&cfg.protection);
         self.max_restarts = cfg.systemd.max_restarts_per_hour;
         {
             let mut l = lock(&self.limits);
             l.kills.set_max(a.max_kills_per_hour);
             l.budget.set_max(a.max_actions_per_hour);
+            l.blocks.set_max(a.firewall.max_blocks_per_hour);
             for w in l.unit_restarts.values_mut() {
                 w.set_max(self.max_restarts);
             }
@@ -278,26 +309,28 @@ impl Responder {
             let reserved = if spec.is_destructive() {
                 let now = clock::now();
                 let mut l = lock(&self.limits);
-                if !l.budget.peek(now) {
+                let block = matches!(spec, ActionSpec::BlockIp { .. });
+                if let Some(why) = self.over_budget(&mut l, spec, now) {
                     drop(l);
-                    out.push(ActionResult::new(
-                        spec,
-                        target_key(ev),
-                        Status::Refused,
-                        format!("circuit breaker: max_actions_per_hour ({}) reached", self.cfg.max_actions_per_hour),
-                    ));
+                    out.push(ActionResult::new(spec, target_key(ev), Status::Refused, why));
                     continue;
                 }
-                l.budget.record(now);
-                Some(now)
+                if block {
+                    l.blocks.record(now)
+                } else {
+                    l.budget.record(now)
+                }
+                Some((now, block))
             } else {
                 None
             };
             let r = self.run_one(spec, ev, extras);
-            if let Some(at) = reserved {
+            if let Some((at, block)) = reserved {
                 let mut l = lock(&self.limits);
                 if attempted(r.status) {
                     l.cooldown.arm(&key, clock::now());
+                } else if block {
+                    l.blocks.unrecord(at);
                 } else {
                     l.budget.unrecord(at);
                 }
@@ -306,6 +339,30 @@ impl Responder {
             out.push(r);
         }
         out
+    }
+
+    /// Why the hour's budget refuses `spec` now, if it does. `block_ip`
+    /// has a budget of its own; of the shared one, the last
+    /// `containment_reserve` slots are for containment only.
+    fn over_budget(&self, l: &mut Limits, spec: &ActionSpec, now: Instant) -> Option<String> {
+        if matches!(spec, ActionSpec::BlockIp { .. }) {
+            let max = self.cfg.firewall.max_blocks_per_hour;
+            return (!l.blocks.peek(now))
+                .then(|| format!("circuit breaker: actions.firewall.max_blocks_per_hour ({max}) reached"));
+        }
+        let max = self.cfg.max_actions_per_hour;
+        let used = l.budget.count(now);
+        if used >= max {
+            return Some(format!("circuit breaker: max_actions_per_hour ({max}) reached"));
+        }
+        let reserve = effective_reserve(&self.cfg);
+        if !spec.is_containment() && used >= max - reserve {
+            return Some(format!(
+                "circuit breaker: max_actions_per_hour ({max}) reached for non-containment actions \
+                 (the last {reserve} are kept for kill/stop/quarantine: actions.containment_reserve)"
+            ));
+        }
+        None
     }
 
     fn run_one(&mut self, spec: &ActionSpec, ev: &Event, extras: &snapshot::Extras) -> ActionResult {
@@ -772,6 +829,19 @@ impl Responder {
         let Some(ip) = ip else {
             return ActionResult::new(spec, ev.subject.to_string(), Status::Skipped, "no IP address in event");
         };
+        let ip = warden_core::net::canonical(ip);
+        if self.cfg.firewall.protect_ssh_sessions && !trusted_ssh_evidence(ev) && self.has_ssh_session(ip) {
+            return ActionResult::new(
+                spec,
+                ip.to_string(),
+                Status::Refused,
+                format!(
+                    "{ip} has an established SSH session to this host (actions.firewall.protect_ssh_sessions): \
+                     not blocked on {} evidence",
+                    if ev.source.is_empty() { "this" } else { ev.source.as_str() }
+                ),
+            );
+        }
         let blocked = lock(&self.handles.firewall).block(ip, ttl);
         match blocked {
             Ok(m) => ActionResult::new(spec, ip.to_string(), Status::Done, m),
@@ -782,6 +852,18 @@ impl Responder {
             }
             Err(m) => ActionResult::new(spec, ip.to_string(), Status::Failed, m),
         }
+    }
+
+    /// Does `ip` have an established connection to a local SSH port? The
+    /// socket table is read at most once a second.
+    fn has_ssh_session(&self, ip: IpAddr) -> bool {
+        let mut l = lock(&self.limits);
+        let fresh = l.ssh_peers.as_ref().is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(1));
+        if !fresh {
+            let peers = warden_sys::net::established_peers(&warden_sys::net::tcp_sockets(), &self.ssh_ports);
+            l.ssh_peers = Some((Instant::now(), peers));
+        }
+        l.ssh_peers.as_ref().is_some_and(|(_, p)| p.contains(&ip))
     }
 
     fn exec(

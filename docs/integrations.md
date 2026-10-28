@@ -1,163 +1,260 @@
-# Интеграции: веб-стеки, ModSecurity, базы данных, микросервисы
+# Integrations: web stacks, ModSecurity, databases, microservices
 
-## Веб-серверы и PHP SAPI
+## Web servers and PHP SAPIs
 
-Warden не встраивается в веб-сервер — он следит за **файлами** (FIM) и
-**процессами** (proc connector). Поэтому он одинаково работает с любым сервером
-и любым способом запуска PHP, Node, Python или Ruby. От стека к стеку отличается
-*какой процесс исполняет код запроса* и *под каким пользователем*; значения по умолчанию
-покрывают типовые конфигурации:
+Warden does not plug into the web server — it watches **files** (FIM) and
+**processes** (proc connector). That makes it work the same with every server
+and every way of running PHP, Node, Python or Ruby. What differs between
+stacks is *which process runs request code* and *as which user*; the defaults
+cover the common setups:
 
-| стек | процесс, исполняющий код запроса | пользователь | покрыт |
+| stack | process that runs request code | user | covered by |
 |---|---|---|---|
-| nginx + PHP-FPM | воркеры пула `php-fpm8.x` | `www-data` или один пользователь на пул | `web_comms` (`php-fpm*`) + не-root, `web_users` |
-| Apache + mod_php (prefork) | воркеры `apache2` / `httpd` | `www-data` / `apache` | `web_comms` + не-root (мастер под root игнорируется) |
-| Apache + PHP-FPM (proxy_fcgi) | воркеры `php-fpm*` | пользователь пула | как nginx + FPM |
-| Apache + mod_fcgid / FastCGI | процессы `php-cgi`, порождённые Apache | `www-data` или suEXEC-пользователь | `web_comms` (`php-cgi*`) |
-| Apache + suEXEC / mpm-itk / mod_ruid2 | воркеры, переключённые на владельца сайта | пользователь сайта | `web_comms` + не-root (работает без перечисления каждого пользователя сайта) |
-| CGI (mod_cgi, nginx + fcgiwrap) | скрипты `perl`/`python`/`sh` | `www-data` | разрешить скрипты по пути: `[[process.allowed_children]] parent = "apache2", child = "/usr/lib/cgi-bin/**"` |
-| LiteSpeed / OpenLiteSpeed | `lsphp` | пользователь сайта | `web_comms` (`lsphp*`, `litespeed`, `lshttpd`) |
-| FrankenPHP, HHVM | `frankenphp`, `hhvm` | пользователь сервиса | `web_comms` |
-| Node.js / Deno / Bun | `node`, `deno`, `bun` | пользователь сервиса | `web_comms` |
-| Python (gunicorn, uWSGI, uvicorn, daphne) | именованные воркеры | пользователь сервиса | `web_comms` |
-| Ruby (puma, unicorn, Passenger), Java (Tomcat), .NET | именованные воркеры | пользователь сервиса | `web_comms` |
+| nginx + PHP-FPM | `php-fpm8.x` pool workers | `www-data` or one user per pool | `web_comms` (`php-fpm*`) + non-root, `web_users` |
+| Apache + mod_php (prefork) | `apache2` / `httpd` workers | `www-data` / `apache` | `web_comms` + non-root (the root master is ignored) |
+| Apache + PHP-FPM (proxy_fcgi) | `php-fpm*` workers | pool user | as nginx + FPM |
+| Apache + mod_fcgid / FastCGI | `php-cgi` processes spawned by Apache | `www-data` or suEXEC user | `web_comms` (`php-cgi*`) |
+| Apache + suEXEC / mpm-itk / mod_ruid2 | workers switched to the site owner | per-site user | `web_comms` + non-root (works without listing every site user) |
+| CGI (mod_cgi, nginx + fcgiwrap) | `perl`/`python`/`sh` scripts | `www-data` | allow scripts by path: `[[process.allowed_children]] parent = "apache2", child = "/usr/lib/cgi-bin/**"` |
+| LiteSpeed / OpenLiteSpeed | `lsphp` | site user | `web_comms` (`lsphp*`, `litespeed`, `lshttpd`) |
+| FrankenPHP, HHVM | `frankenphp`, `hhvm` | service user | `web_comms` |
+| Node.js / Deno / Bun | `node`, `deno`, `bun` | service user | `web_comms` |
+| Python (gunicorn, uWSGI, uvicorn, daphne) | named workers | service user | `web_comms` |
+| Ruby (puma, unicorn, Passenger), Java (Tomcat), .NET | named workers | service user | `web_comms` |
 
-«Не-root» важен: мастер-процессы Apache/nginx работают под root и
-законно запускают хелперы (piped loggers вроде `rotatelogs`, тесты конфигурации);
-код запроса всегда исполняется в непривилегированных воркерах. Warden считает веб-воркерами
-только не-root-процессы с такими именами — плюс всё, что работает под
-учётной записью из `web_users`.
+"Non-root" matters: master processes of Apache/nginx run as root and
+legitimately start helpers (piped loggers like `rotatelogs`, config tests);
+request code always runs in unprivileged workers. Warden only treats
+non-root processes with these names as web workers — plus anything running as
+an account in `web_users`.
 
-FIM тоже не привязан к серверу: укажите `[[fim.site]] root` на корень документов,
-а `access_log` — на access-log сервера в формате combined/common (по умолчанию у
-nginx и Apache).
+The FIM is server-agnostic too: point `[[fim.site]] root` at the document root
+and `access_log` at the server's access log in combined/common format (the
+default for both nginx and Apache).
 
-**Обновления CMS и плагинов.** Обновление через админку CMS (WordPress,
-Joomla, Bitrix, `npm`/`composer`-прогон от PHP-воркера) меняет сотни
-файлов, записанных тем же PHP-воркером, которым воспользовалась бы и инфекция. Warden
-отличает одно от другого по содержимому: массовое изменение убивает писателей, только когда их собственные
-записи совпали с сигнатурами; всплеск чистых изменений — это
-предупреждение `fim.mass_change`. Ставьте FIM на паузу вокруг плановых обновлений, чтобы
-изменения принимались в baseline — они всё равно сканируются, и
-вредоносный код всё равно сообщается и отправляется в карантин:
+**CMS and plugin updates.** An update through the CMS admin (WordPress,
+Joomla, Bitrix, an `npm`/`composer` run by the PHP worker) changes hundreds
+of files, written by the same PHP worker an infection would use. Warden tells
+the two apart by content: a mass change kills writers only when their own
+writes matched the signatures; a burst of clean changes is a
+`fim.mass_change` warning. Pause the FIM around planned updates so that the
+changes are accepted into the baseline — they are still scanned, and
+malicious code is still reported and quarantined:
 
 ```bash
-wardenctl fim pause main 30m     # перед обновлением (имя сайта из [[fim.site]])
-# ... обновление ...
-wardenctl fim accept main        # если что-то осталось принять
+wardenctl fim pause main 30m     # before the update (site name from [[fim.site]])
+# ... update ...
+wardenctl fim accept main        # if anything is left to accept
 ```
 
-Деплои через `git`, `rsync` и другие инструменты из `fim.trusted_writers`
-принимаются без паузы.
+Deployments by `git`, `rsync` and other tools in `fim.trusted_writers` are
+accepted without a pause.
 
-## ModSecurity (v2 и v3)
+## ModSecurity (v2 and v3)
 
 | | ModSecurity v2 (`mod_security2`) | ModSecurity v3 (libmodsecurity) |
 |---|---|---|
-| серверы | Apache httpd | nginx (коннектор ModSecurity-nginx), коннектор Apache |
-| пакеты Debian/Ubuntu | `libapache2-mod-security2` | `libmodsecurity3` + `libnginx-mod-http-modsecurity` |
-| что читает Warden | `SecAuditLog` (нативный или JSON) и/или Apache `error.log` | `SecAuditLog` (нативный или JSON) и/или nginx `error.log` |
+| servers | Apache httpd | nginx (ModSecurity-nginx connector), Apache connector |
+| Debian/Ubuntu packages | `libapache2-mod-security2` | `libmodsecurity3` + `libnginx-mod-http-modsecurity` |
+| what Warden reads | `SecAuditLog` (native or JSON) and/or Apache `error.log` | `SecAuditLog` (native or JSON) and/or nginx `error.log` |
 
-Обе ветки поддерживаются под эгидой OWASP; набор правил, который использует большинство, —
-OWASP Core Rule Set (CRS). Warden **не** заменяет ModSecurity — он добавляет
-то, чего WAF на уровне запроса не умеет:
+Both branches are maintained under OWASP; the rule set most people use is the
+OWASP Core Rule Set (CRS). Warden does **not** replace ModSecurity — it adds
+what a per-request WAF cannot do:
 
-* **память между запросами**: считает заблокированные транзакции по IP клиента и,
-  после `waf.block_after` в пределах `waf.window`, блокирует адрес в nftables
-  на `block_ttl` (как fail2ban, но без обслуживания регулярных выражений под каждый
-  дистрибутив);
-* **эвристический скоринг**: каждый настойчивый атакующий добавляет `waf_attack` очков
-  к оценке подозрительности IP, общей с SSH-брутфорсом, доступом к веб-шеллу…;
-* **корреляция с файловой системой**: когда скрипт появляется или меняется,
-  список подозрительных запросов FIM ставит первыми клиентов, которых пометила ModSecurity
-  (`waf_hits`, `waf_rules`) — обычно это атакующий, нашедший дыру.
+* **memory across requests**: count blocked transactions per client IP and,
+  after `waf.block_after` within `waf.window`, block the address in nftables
+  for `block_ttl` (fail2ban-like, with no per-distro regex maintenance);
+* **heuristic scoring**: each persistent attacker adds `waf_attack` points
+  to the IP's suspicion score shared with SSH brute force, webshell access…;
+* **correlation with the filesystem**: when a script appears or changes, the
+  FIM's list of suspect requests puts clients that ModSecurity flagged first
+  (`waf_hits`, `waf_rules`) — usually the attacker who found the hole.
 
-Минимальная настройка:
+Minimal setup:
 
 ```toml
 # /etc/warden/conf.d/60-modsecurity.toml
 [[waf.log]]
-path = "/var/log/apache2/modsec_audit.log"   # или /var/log/nginx/error.log
-site = "main"                                # [[fim.site]], который он защищает
+path = "/var/log/apache2/modsec_audit.log"   # or /var/log/nginx/error.log
+site = "main"                                # the [[fim.site]] it protects
 ```
 
-Форматы определяются построчно (`format = "auto"`): JSON-аудит-логи обеих
-веток, нативный серийный аудит-лог (`--xxxx-A--` / `---xxxx---A--`) и
-строки error-log (`ModSecurity: Access denied ...`). Один запрос, залогированный
-несколькими строками (по одной на совпавшее правило), считается один раз по своему `unique_id`.
+Formats are detected per line (`format = "auto"`): JSON audit logs from both
+branches, the native serial audit log (`--xxxx-A--` / `---xxxx---A--`), and
+error-log lines (`ModSecurity: Access denied ...`). One request logged as
+several lines (one per matched rule) is counted once via its `unique_id`.
+A line with bytes that are not UTF-8 (a raw header) is read with them
+replaced, and a record longer than 320 KiB (a request body in the audit log)
+keeps its head and tail — enough for the client address and the rule
+messages; a record cut across its structure is salvaged field by field.
 
-Настройки тонкой подстройки: `min_rule_severity` (по умолчанию `critical`), `ignore_rules` для ложных
-срабатываний CRS на ваших приложениях, `count_detection_only` пока
-ModSecurity работает в режиме `DetectionOnly`.
+### Any ModSecurity setup
 
-## Базы данных
+Since 0.14.2 Warden follows the logs the web servers are configured to write
+without being told (`waf.discover = true`, the default): it reads the Apache
+(`/etc/apache2`, `/etc/httpd`), nginx and Angie configuration the way the
+servers do — includes with globs, `Define`, Debian's `envvars`, virtual hosts
+and what they inherit — every five minutes. `wardenctl waf discover` shows
+what it finds, per virtual host, as `[[waf.log]]` entries to pin:
 
-* **Никогда не жертва OOM случайно** — серверы БД находятся в `memory.culprit.avoid`
-  (оценка × 0.2, × 0.05 в профиле database). Установка `OOMScoreAdjust=-800`
-  в юните БД заставляет и ядро, и Warden её пропускать.
-* **Данные никогда не чистятся** — `/var/lib` жёстко защищён от любого действия очистки
-  и карантина.
-* **Здоровье**: «процесс работает» ≠ «база отвечает». Используйте командные
-  проверки: `mysqladmin ping`, `pg_isready`, `redis-cli ping` (примеры в
-  `config/conf.d/50-database.toml`). После `failures` промахов подряд Warden
-  снимает снимок и перезапускает юнит, затем ждёт `grace` (восстановление InnoDB/WAL),
-  прежде чем судить снова.
-* **SQL-инъекция → выполнение команд**: shell или инструмент, запущенный
-  `mysqld`, `postgres`, `redis-server`, `mongod`… поднимает `security.db_spawn`
-  (critical и убивается, когда командная строка — загрузчик/reverse shell).
-  `archive_command` PostgreSQL законно идёт через `sh -c` — разрешите это
-  через `[[process.allowed_children]] parent = "postgres"`.
-* **UDF-бэкдоры**: новые или изменённые `.so`-файлы в `/usr/lib/mysql/plugin/`
-  сообщаются детектором целостности.
-* **Настройки ядра для баз данных**: `wardenctl tuning` помечает THP=always при
-  Redis/MongoDB, высокий swappiness на хостах с БД, `vm.max_map_count` для Elasticsearch
-  и процентные dirty-лимиты на машинах с большим объёмом RAM.
+| ModSecurity setup | what Warden follows |
+|---|---|
+| `SecAuditLogType Serial`, one log for the server | that log (JSON or native) |
+| `SecAuditLog` inside `<VirtualHost>` — one log per site | each site's log; `[[waf.log]] path` may be a glob, `site = "{1}"` names the site after what `*` matched, new sites are picked up within 30 s |
+| `SecAuditLogType Concurrent` | the index (`SecAuditLog`) and, below `SecAuditLogStorageDir`, the file it names for each transaction (`format = "concurrent"`, `storage_dir = …`) |
+| Concurrent, index piped to `mlogc` | the storage directory, scanned for new files (`format = "concurrent"`, `path` = the directory); an entry shipped and deleted within a second can be missed, so the error log is followed too |
+| audit log piped away, off, or without part `H` | the error log of that site (`format = "error_log"`) |
+| ModSecurity-nginx / Angie (libmodsecurity 3) | `SecAuditLog` from `modsecurity_rules_file` / `modsecurity_rules`, per `server` |
 
-## Микросервисы и контейнеры
+```toml
+# one audit log per site, e.g. Apache with SecAuditLog per VirtualHost
+[[waf.log]]
+path = "/var/log/apache2/*/modsec_audit.log"
+site = "{1}"
 
-* **Проверки здоровья** (`[[health.check]]`, `type = "http" | "tcp" | "command"`)
-  работают в собственном потоке: один зависший endpoint никогда не задерживает другие детекторы.
-* **Атрибуция**: события процессов несут `container=` — `docker:<name>` (драйверы systemd
-  и cgroupfs), `podman:<id>`, `k8s:pod-<uid>/<container>`,
+# concurrent mode
+[[waf.log]]
+path = "/var/log/modsec/index"
+format = "concurrent"
+storage_dir = "/var/log/modsec/audit"
+```
+
+Checked against real builds (Ubuntu 24.04: Apache 2.4.58 + ModSecurity
+2.9.7, nginx 1.24 + libmodsecurity 3.0.12 + connector 1.0.3, CRS 3.3.5; the
+records are in `crates/warden-detect/testdata/modsecurity`), with the
+differences between them handled:
+
+* ModSecurity 2.9.6+ puts a directory per user above the days of a
+  concurrent log (`<storage>/www-data/20261027/…`); libmodsecurity 3 does not,
+  but writes absolute paths and a fractional length into its index;
+* the native serial format of libmodsecurity 3 has three dashes in its
+  boundaries and `ModSecurity: …` lines in section `H` instead of `Message:`;
+  ModSecurity 2 adds `Apache-Error:` copies of each message — one transaction
+  is still one hit;
+* inside a native record only boundaries with that record's random id count:
+  a request body (part `I`) is logged verbatim, and one that holds an end of
+  record and a made-up record for someone else's address stays body;
+* JSON: `transaction_id`/`remote_address` (2.x) and
+  `unique_id`/`client_ip` (3.x).
+
+Two things to know on nginx: a `location` answered by `return` is never seen
+by ModSecurity-nginx (the module runs after the rewrite phase), and
+libmodsecurity 3.0.12 does not know `IncludeOptional` — the packaged
+`owasp-crs.load` written for Apache does not load in nginx; include the CRS
+files with `Include`.
+
+The files of a concurrent log are written by the web server's workers in
+directories they own. Warden opens them below the storage directory one
+component at a time and never through a symlink, reads only regular files
+of at most 4 MiB, in batches of 2000 (a backlog is read without pause, never
+skipped — a flood of junk cannot push an attack past the reader): an index line naming
+`../../etc/shadow`, or a storage directory replaced by a symlink, leads
+nowhere. Configuration files that are not root's (or are writable by
+others) are not read by discovery.
+
+### Who can write the log
+
+A webshell runs as the web user. If that user can write the log Warden
+reads, it can add entries naming any address — and have it blocked. Warden
+looks at the owner and mode of every WAF log (and its directories), reports
+a log a web account (`process.web_users` and their groups) can write in
+`wardenctl doctor`, `wardenctl status` (WAF logs) and in the event
+(`log_trust`), and:
+
+* `waf.trust_writable_logs = true` (default): such a log still blocks —
+  on nginx (Debian writes its logs as `www-data`) and with ModSecurity-nginx
+  (the workers write the audit log) there is no other source;
+* `fim.trust_writable_logs = false` (default): a request for a flagged file
+  read from a web-writable access log is reported and scored, but blocks
+  nothing by itself;
+* `actions.firewall.protect_ssh_sessions = true` (default): whatever the
+  evidence, an address with an established SSH session to the host is not
+  blocked — unless the evidence is about SSH itself and comes from the
+  journal — so a forged line cannot lock the administrator out.
+
+In concurrent mode this is so by design: the workers write every entry
+into a storage directory they own, and doctor says so. The index itself is
+written by root; Warden takes the address from the entry, which a webshell
+could rewrite between ModSecurity writing it and Warden reading it — set
+`waf.trust_writable_logs = false` if that matters more than blocking.
+
+Apache's serial audit log is opened by the root parent: keep it `root:adm`
+(not `www-data`). With `mod_php`, PHP runs inside the worker that holds the
+descriptor and can still write through it: prefer PHP-FPM under its own user.
+
+Tuning knobs: `min_rule_severity` (default `critical`), `ignore_rules` for CRS
+false positives on your applications, `count_detection_only` while
+ModSecurity runs in `DetectionOnly`.
+
+## Databases
+
+* **Never the OOM victim by accident** — DB servers are in `memory.culprit.avoid`
+  (score × 0.2, × 0.05 in the database profile). Setting `OOMScoreAdjust=-800`
+  in the DB's unit makes both the kernel and Warden skip it.
+* **Data is never cleaned** — `/var/lib` is hard-protected from every cleanup
+  and quarantine action.
+* **Health**: "the process is running" ≠ "the database answers". Use command
+  checks: `mysqladmin ping`, `pg_isready`, `redis-cli ping` (examples in
+  `config/conf.d/50-database.toml`). After `failures` consecutive misses Warden
+  takes a snapshot and restarts the unit, then waits `grace` (InnoDB/WAL
+  recovery) before judging again.
+* **SQL injection → command execution**: a shell or tool started by
+  `mysqld`, `postgres`, `redis-server`, `mongod`… raises `security.db_spawn`
+  (critical and killed when the command line is a downloader/reverse shell).
+  PostgreSQL's `archive_command` legitimately runs through `sh -c` — allow it
+  with `[[process.allowed_children]] parent = "postgres"`.
+* **UDF backdoors**: new or changed `.so` files in `/usr/lib/mysql/plugin/`
+  are reported by the integrity detector.
+* **Kernel settings for databases**: `wardenctl tuning` flags THP=always with
+  Redis/MongoDB, high swappiness on DB hosts, Elasticsearch's
+  `vm.max_map_count`, and percentage-based dirty limits on large-RAM machines.
+
+## Microservices and containers
+
+* **Health checks** (`[[health.check]]`, `type = "http" | "tcp" | "command"`)
+  run in their own thread: one hung endpoint never delays other detectors.
+* **Attribution**: process events carry `container=` — `docker:<name>` (systemd
+  and cgroupfs drivers), `podman:<id>`, `k8s:pod-<uid>/<container>`,
   `lxc:<name>`, `machine:<name>` (systemd-nspawn).
-* **Какой сервис тормозит**: события давления на память перечисляют cgroups с
-  наибольшим PSI памяти (`most_stalled_cgroups`), а не только самые большие.
-* **OOM по лимиту cgroup**: когда сервис или контейнер упирается в свой
-  `MemoryMax`/лимит контейнера, событие так и говорит — «api.service упёрся в свой лимит
-  памяти» — вместо общего OOM.
-* **Внутри контейнера**: пороги памяти используют лимит cgroup контейнера
-  и его собственный PSI, а не хоста.
-* **Действия над сервисами**: `restart_unit`, `freeze_cgroup`/`kill_cgroup`
-  (cgroup v2), `limit_unit` (на лету `CPUQuota=`/`MemoryHigh=`/`MemoryMax=`).
+* **Which service is stalling**: memory pressure events list the cgroups with
+  the highest memory PSI (`most_stalled_cgroups`), not only the biggest ones.
+* **Cgroup-limited OOM**: when a service or container hits its own
+  `MemoryMax`/container limit, the event says so — "api.service hit its memory
+  limit" — instead of a generic OOM.
+* **Inside a container**: memory thresholds use the container's cgroup limit
+  and the container's own PSI, not the host's.
+* **Actions on services**: `restart_unit`, `freeze_cgroup`/`kill_cgroup`
+  (cgroup v2), `limit_unit` (runtime `CPUQuota=`/`MemoryHigh=`/`MemoryMax=`).
 
-## Долго работающие и зависшие процессы
+## Long-running and hung processes
 
-| ситуация | как это видит Warden | типичное действие |
+| situation | how Warden sees it | typical action |
 |---|---|---|
-| PHP-скрипт в бесконечном цикле | `[[process.limit]]` `cpu_percent` в течение `cpu_duration` | `kill` (FPM поднимает нового воркера) |
-| CGI/CLI-скрипт, работающий часами | `[[process.limit]]` `max_runtime` | `kill` или `throttle` |
-| воркер течёт по памяти | `[[process.limit]]` `max_rss` | report, `restart_unit` |
-| бэкап/дамп мешает продакшену | `[[process.limit]]` на `mysqldump`, `pg_dump`… | `throttle` (nice 19 + idle I/O) |
-| сервис жив, но не отвечает | `[[health.check]]` | snapshot + `restart_unit` |
-| задача застряла в ядре (NFS, умирающий диск) | `process.uninterruptible`, `kernel.hung_task` | snapshot (сигналы не помогут: чините хранилище) |
-| весь хост завис | `system.stall` (опоздание планировщика) | snapshot, снятый *во время* зависания |
+| PHP script in an infinite loop | `[[process.limit]]` `cpu_percent` for `cpu_duration` | `kill` (FPM respawns the worker) |
+| CGI/CLI script running for hours | `[[process.limit]]` `max_runtime` | `kill` or `throttle` |
+| worker leaking memory | `[[process.limit]]` `max_rss` | report, `restart_unit` |
+| backup/dump hurting production | `[[process.limit]]` on `mysqldump`, `pg_dump`… | `throttle` (nice 19 + idle I/O) |
+| service alive but not answering | `[[health.check]]` | snapshot + `restart_unit` |
+| task stuck in the kernel (NFS, dying disk) | `process.uninterruptible`, `kernel.hung_task` | snapshot (signals cannot help: fix storage) |
+| whole host frozen | `system.stall` (scheduler lateness) | snapshot captured *during* the freeze |
 
-## Тюнинг ядра — что Warden делает и что нет
+## Kernel tuning — what Warden does and does not change
 
-Динамический тюнинг звучит привлекательно, но большинство sysctl меняют задержку на
-пропускную способность или безопасность на производительность, а автоматическое изменение в
-03:00 — это изменение, которое никто не проверял. Поэтому Warden их разделяет:
+Dynamic tuning sounds attractive, but most sysctls trade latency against
+throughput or safety against performance, and an automatic change made at
+03:00 is a change nobody reviewed. Warden therefore splits them:
 
-* **Ёмкостные лимиты** — таблицы и счётчики, которые заставляют ядро *отказывать в работе*
-  при исчерпании: `nf_conntrack_max` (новые соединения отбрасываются), `kernel.pid_max`
-  (fork падает), `fs.file-max` (open падает). При `[tuning] auto_grow = true`
-  Warden удваивает их, когда детектор лимитов видит их почти полными, никогда
-  сверх вычисленного из RAM потолка, журналирует исходное значение
-  (`wardenctl tuning --revert` восстанавливает всё) и, при `persist = true`,
-  пишет `/etc/sysctl.d/90-warden.conf`.
-* **Поведенческие настройки** — swappiness, dirty-ratio, overcommit, THP, somaxconn,
-  sysctl укрепления безопасности: только **рекомендуются**, с причиной и
-  замером, который их вызвал (`wardenctl tuning`).
+* **Capacity limits** — tables and counters that make the kernel *refuse work*
+  when exhausted: `nf_conntrack_max` (new connections dropped), `kernel.pid_max`
+  (fork fails), `fs.file-max` (open fails). With `[tuning] auto_grow = true`
+  Warden doubles them when the limits detector sees them nearly full, never
+  beyond a RAM-proportional cap, journals the original value
+  (`wardenctl tuning --revert` restores everything) and, with `persist = true`,
+  writes `/etc/sysctl.d/90-warden.conf`.
+* **Behaviour knobs** — swappiness, dirty ratios, overcommit, THP, somaxconn,
+  security hardening sysctls: only **recommended**, with the reason and the
+  measurement that triggered it (`wardenctl tuning`).
 
-«Сколько памяти есть» отвечается динамически: пороги памяти масштабируются
-под RAM (`memory.auto_scale`) и следуют лимиту cgroup внутри контейнеров.
+"How much memory is there" is answered dynamically: memory thresholds scale
+with RAM (`memory.auto_scale`) and follow the cgroup limit inside containers.

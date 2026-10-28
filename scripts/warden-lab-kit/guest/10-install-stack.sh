@@ -215,10 +215,20 @@ if command -v a2disconf >/dev/null 2>&1; then
 fi
 rm -f /etc/apache2/conf-enabled/warden-lab-crs.conf /etc/apache2/conf-available/warden-lab-crs.conf
 
-# Audit log and PHP error log: writable by Apache, readable by root/Warden.
-touch /var/log/apache2/modsec_audit.log /var/log/apache2/php-error.log
-chown www-data:adm /var/log/apache2/modsec_audit.log /var/log/apache2/php-error.log
-chmod 0640 /var/log/apache2/modsec_audit.log /var/log/apache2/php-error.log
+# The serial audit log is opened by Apache's root parent and written by the
+# children through the inherited descriptor: it stays root:adm, so a webshell
+# running as www-data cannot forge entries that make Warden block an address
+# (Warden reports logs a web user can write, see `wardenctl doctor`).
+touch /var/log/apache2/modsec_audit.log
+chown root:adm /var/log/apache2/modsec_audit.log
+chmod 0640 /var/log/apache2/modsec_audit.log
+# PHP writes its own error log as www-data: keep it out of /var/log/apache2,
+# whose rotation (/etc/logrotate.d/apache2) recreates files as root.
+install -d -o root -g adm -m 0750 /var/log/warden-lab
+touch /var/log/warden-lab/php-error.log
+chown www-data:adm /var/log/warden-lab/php-error.log
+chmod 0640 /var/log/warden-lab/php-error.log
+rm -f /var/log/apache2/php-error.log
 install -d -o www-data -g www-data -m 0750 /var/cache/modsecurity
 
 # Install a deliberately vulnerable but bounded test site. Uploads can be written
@@ -266,9 +276,13 @@ sed "s/{{LAB_IP}}/${LAB_IP}/g" "$ROOT/guest/config/nginx-site.conf.in" > /etc/ng
 rm -f /etc/nginx/sites-enabled/default
 ln -sfn /etc/nginx/sites-available/warden-lab /etc/nginx/sites-enabled/warden-lab
 
-# Long-run audit log rotation. Apache graceful-reopens the serial audit log.
-cat > /etc/logrotate.d/warden-lab-modsecurity <<'LOGROTATE'
-/var/log/apache2/modsec_audit.log {
+# Log rotation. /var/log/apache2/*.log — the ModSecurity audit log too — is
+# rotated by the package's /etc/logrotate.d/apache2 (with a graceful reload).
+# A second entry for the same file made logrotate fail every night ("duplicate
+# log entry"), so all of the host's log rotation failed with it.
+rm -f /etc/logrotate.d/warden-lab-modsecurity
+cat > /etc/logrotate.d/warden-lab-php <<'LOGROTATE'
+/var/log/warden-lab/php-error.log {
     daily
     rotate 14
     compress
@@ -276,12 +290,9 @@ cat > /etc/logrotate.d/warden-lab-modsecurity <<'LOGROTATE'
     missingok
     notifempty
     create 0640 www-data adm
-    sharedscripts
-    postrotate
-        /usr/sbin/apachectl graceful >/dev/null 2>&1 || true
-    endscript
 }
 LOGROTATE
+logrotate --debug /etc/logrotate.conf >/dev/null 2>&1 || lab_die "logrotate rejects the configuration: run 'logrotate --debug /etc/logrotate.conf'"
 
 # Bound journal usage for long-running testing.
 install -d -m 0755 /etc/systemd/journald.conf.d

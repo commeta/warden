@@ -40,6 +40,8 @@ pub mod systemd;
 pub mod tuning;
 pub mod util;
 pub mod waf;
+pub mod waf_discover;
+pub mod waf_sources;
 
 pub use runtime::{Cx, Detector, Metrics, SensorState, Shared, Sink, Wake};
 
@@ -119,7 +121,7 @@ fn access_wanted(c: &Config) -> bool {
     c.fim.enabled && c.fim.sites.iter().any(|s| s.access_log.is_some())
 }
 fn waf_wanted(c: &Config) -> bool {
-    c.waf.enabled && !c.waf.logs.is_empty()
+    c.waf.enabled && (!c.waf.logs.is_empty() || (c.waf.discover && waf_discover::web_server_present()))
 }
 fn fim_wanted(c: &Config) -> bool {
     c.fim.enabled && !c.fim.sites.is_empty()

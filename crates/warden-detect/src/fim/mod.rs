@@ -763,7 +763,11 @@ impl FimWorker {
                 }
                 continue;
             }
-            let Some((reqs, last)) = self.shared.access.with(&name, |r| (r.since(since), r.last_seq())) else {
+            let Some((reqs, last, writable)) = self
+                .shared
+                .access
+                .with(&name, |r| (r.since(since), r.last_seq(), r.writable_by_web().map(str::to_owned)))
+            else {
                 continue;
             };
             self.sites[idx].access_seq = last;
@@ -790,10 +794,20 @@ impl FimWorker {
                 .detail("site", name.clone())
                 .detail("ip", r.ip.to_string())
                 .detail("path", &*r.path);
-                ev = if self.cfg.block_attackers {
-                    ev.actions(vec![ActionSpec::BlockIp { ttl: Some(Duration::from_secs(86400)) }])
-                } else {
+                if let Some(why) = &writable {
+                    ev = ev.detail("log_trust", format!("writable by a web user: {why}"));
+                }
+                ev = if !self.cfg.block_attackers {
                     ev.detail(warden_core::event::IP_BLOCK_OFF, "fim.block_attackers = false")
+                } else if writable.is_some() && !self.cfg.trust_writable_logs {
+                    // N5: one line a webshell can write must not block an
+                    // address of its choosing (for a day)
+                    ev.detail(
+                        warden_core::event::IP_BLOCK_OFF,
+                        "the access log can be written by a web user (fim.trust_writable_logs = false)",
+                    )
+                } else {
+                    ev.actions(vec![ActionSpec::BlockIp { ttl: Some(Duration::from_secs(86400)) }])
                 };
                 self.emit(ev);
             }
@@ -1332,6 +1346,45 @@ mod tests {
         let ev = lock(&events).clone();
         let shell = ev.iter().find(|e| e.kind == "security.webshell").expect("webshell");
         assert!(shell.details["suspect_requests"].to_string().contains("203.0.113.66"), "{:?}", shell.details);
+    }
+
+    /// N5: a request for a flagged file read from an access log a web user
+    /// can write is reported, but does not block the address by itself.
+    #[test]
+    fn webshell_access_from_a_web_writable_log_does_not_block() {
+        let site = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let r = site.path();
+        std::fs::write(r.join("index.php"), "<?php echo 1;").unwrap();
+        let (shared, events, mut w) = setup(r, state.path());
+        w.full_scan(0, false);
+        std::fs::write(r.join("sh.php"), "<?php system($_REQUEST['c']);").unwrap();
+        w.process_write(&r.join("sh.php"), Some(fpm(900)));
+        let request = |ip: &str| {
+            let line = format!("{ip} - - [{}] \"GET /sh.php?c=id HTTP/1.1\" 200 3 \"-\" \"-\"", clf_now());
+            shared.access.push("main", correlate::parse_line(&line).unwrap());
+        };
+        let access = |events: &Arc<std::sync::Mutex<Vec<Event>>>| {
+            lock(events).iter().filter(|e| e.kind == "security.webshell_access").cloned().collect::<Vec<_>>()
+        };
+
+        shared.access.set_writable("main", Some("/var/log/nginx/access.log is owned by www-data".into()));
+        lock(&events).clear();
+        request("198.51.100.20");
+        w.check_access();
+        let ev = access(&events);
+        assert_eq!(ev.len(), 1);
+        assert!(ev[0].actions.is_empty(), "no block on a line a webshell can write");
+        assert!(ev[0].details[warden_core::event::IP_BLOCK_OFF].as_str().unwrap().contains("trust_writable_logs"));
+        assert!(ev[0].details["log_trust"].as_str().unwrap().contains("www-data"));
+
+        // a log only root can write is a witness: the address is blocked
+        shared.access.set_writable("main", None);
+        lock(&events).clear();
+        request("198.51.100.21");
+        w.check_access();
+        let ev = access(&events);
+        assert!(matches!(ev[0].actions[..], [ActionSpec::BlockIp { .. }]), "{:?}", ev[0].actions);
     }
 
     fn clf_now() -> String {

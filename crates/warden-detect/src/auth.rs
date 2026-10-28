@@ -365,13 +365,34 @@ fn journal_sender_trusted(v: &serde_json::Value, ident: &str) -> bool {
     in_system_dir && exe.rsplit('/').next() == Some(ident)
 }
 
-/// Is `path` a log file that a syslog daemon is actively writing?
-fn auth_log_is_live(path: &std::path::Path) -> bool {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.elapsed().ok())
-        .is_some_and(|age| age < Duration::from_secs(7 * 86400))
+/// Is journald there to read from?
+fn journal_available() -> bool {
+    which("journalctl").is_some() && std::path::Path::new("/run/systemd/journal").exists()
+}
+
+/// Lines of the auth log *file* carry no sender: what they say may come from
+/// any local user (`logger -t sshd`). Unless the operator trusts the file
+/// (`auth.trust_file`), they are evidence, not grounds for a block (N4).
+pub fn untrusted_file_line(mut ev: Event) -> Event {
+    if ev.actions.iter().any(|a| matches!(a, ActionSpec::BlockIp { .. })) {
+        ev.actions.retain(|a| !matches!(a, ActionSpec::BlockIp { .. }));
+        ev = ev.detail(
+            warden_core::event::IP_BLOCK_OFF,
+            "read from the auth log file, which does not record who wrote a line (auth.trust_file = false)",
+        );
+    }
+    ev.detail("log_source", "file")
+}
+
+/// Kills and reaps `journalctl` however the reader leaves (an error, a
+/// reload, a panic in the analyzer): it must not outlive the sensor (N16).
+struct ReapOnDrop(std::process::Child);
+
+impl Drop for ReapOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 pub fn run_auth(shared: &Arc<Shared>, sink: &Sink) -> Result<(), String> {
@@ -384,14 +405,11 @@ pub fn run_auth(shared: &Arc<Shared>, sink: &Sink) -> Result<(), String> {
     let use_journal = match cfg.auth.source {
         AuthSource::Journal => true,
         AuthSource::File => false,
-        // A live auth.log (rsyslog) is the cheaper source: tailing a file
-        // costs nothing, while `journalctl -f` is a second process that maps
-        // the journal (its page cache is charged to Warden's cgroup).
-        AuthSource::Auto => {
-            !auth_log_is_live(&cfg.auth.auth_log)
-                && which("journalctl").is_some()
-                && std::path::Path::new("/run/systemd/journal").exists()
-        }
+        // journald whenever it runs, even with a live auth.log next to it:
+        // only the journal records who sent a line, and a line any user
+        // can forge must not block an address (N4 of the 0.14.1 review;
+        // 0.14.1 preferred a live auth.log because tailing it is cheaper).
+        AuthSource::Auto => journal_available(),
     };
     let emit = |mut ev: Event| {
         ev.source = "auth".into();
@@ -399,7 +417,7 @@ pub fn run_auth(shared: &Arc<Shared>, sink: &Sink) -> Result<(), String> {
     };
 
     if use_journal {
-        let mut child = Command::new("journalctl")
+        let child = Command::new("journalctl")
             .args([
                 "-f",
                 "-n",
@@ -417,13 +435,12 @@ pub fn run_auth(shared: &Arc<Shared>, sink: &Sink) -> Result<(), String> {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("journalctl: {e}"))?;
-        let out = child.stdout.take().ok_or("journalctl: no stdout")?;
+        let mut child = ReapOnDrop(child);
+        let out = child.0.stdout.take().ok_or("journalctl: no stdout")?;
         shared.set_sensor("auth", SensorState::Running);
         let mut reader = warden_sys::util::LineReader::new(out);
         while let Ok(line) = reader.next_line(Duration::from_secs(2)) {
             if shared.generation() != generation || shared.is_shutting_down() {
-                let _ = child.kill();
-                let _ = child.wait();
                 return Err("configuration reloaded".into());
             }
             let Some(line) = line else { continue };
@@ -435,11 +452,10 @@ pub fn run_auth(shared: &Arc<Shared>, sink: &Sink) -> Result<(), String> {
                 continue;
             }
             for ev in an.analyze(ident, &msg, Instant::now()) {
-                emit(ev);
+                emit(ev.detail("log_source", "journal"));
             }
         }
-        let _ = child.kill();
-        let _ = child.wait();
+        drop(child);
         Err("journalctl exited".into())
     } else {
         let path = cfg.auth.auth_log.clone();
@@ -459,7 +475,11 @@ pub fn run_auth(shared: &Arc<Shared>, sink: &Sink) -> Result<(), String> {
                 if let Some((ident, msg)) = an.split_syslog(&line) {
                     let (ident, msg) = (ident.to_owned(), msg.to_owned());
                     for ev in an.analyze(&ident, &msg, Instant::now()) {
-                        emit(ev);
+                        emit(if cfg.auth.trust_file {
+                            ev.detail("log_source", "file")
+                        } else {
+                            untrusted_file_line(ev)
+                        });
                     }
                 }
             }
@@ -492,6 +512,25 @@ mod tests {
         assert_eq!(users.len(), 3);
         let v = a.analyze("sshd", "Accepted password for deploy from 203.0.113.9 port 5000 ssh2", now);
         assert!(v.iter().any(|e| e.kind == "security.bruteforce_success" && e.severity == Severity::Critical));
+    }
+
+    /// N4: `logger -t sshd "Failed password for root from <victim>"` lands
+    /// in auth.log like a real sshd line. Read from the file, it no longer
+    /// blocks the address; the evidence still counts.
+    #[test]
+    fn lines_from_the_auth_log_file_do_not_block_by_themselves() {
+        let mut a = an();
+        let now = Instant::now();
+        let mut out = Vec::new();
+        for i in 0..3 {
+            out.extend(a.analyze("sshd", &format!("Failed password for root from 198.51.100.77 port {i} ssh2"), now));
+        }
+        assert_eq!(out.len(), 1);
+        let ev = untrusted_file_line(out.remove(0));
+        assert_eq!(ev.kind, "security.ssh_bruteforce");
+        assert!(ev.actions.is_empty(), "no block from a line anyone can write");
+        assert!(ev.details.contains_key(warden_core::event::IP_BLOCK_OFF));
+        assert_eq!(ev.details["log_source"], "file");
     }
 
     #[test]

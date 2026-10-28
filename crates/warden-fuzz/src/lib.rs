@@ -56,11 +56,26 @@ pub fn access_log(data: &[u8]) {
 /// ModSecurity v2 (Apache error log), v3 (nginx error log) and JSON audit
 /// records.
 pub fn modsecurity(data: &[u8]) {
+    let mut native = waf::NativeParser::default();
+    let mut auto = waf::NativeParser::default();
     for line in lines(data) {
+        // the dispatch of a log whose format is found from its lines
+        let _ = warden_detect::waf_sources::parse_line(warden_core::config::WafFormat::Auto, line, &mut auto);
         let _ = waf::parse_error_line(line);
         let _ = waf::parse_json_line(line);
+        let _ = waf::salvage_json_line(line);
         let _ = waf::parse_client(line);
+        if let Some(e) = waf::parse_index_line(line) {
+            // an index line names a file below the storage directory; the
+            // reader refuses anything else, but the parser must not invent
+            // a path that is not in the line
+            assert!(line.contains(&e.file), "{line:?}");
+        }
+        let _ = native.feed(line);
     }
+    let _ = native.finish();
+    // a whole concurrent-log entry file (JSON or native)
+    let _ = waf::parse_entry(&String::from_utf8_lossy(data));
 }
 
 /// A D-Bus message from the system bus (any peer can send Warden a directed
@@ -171,6 +186,9 @@ pub fn seeds(target: &str) -> Vec<Vec<u8>> {
             r#"[Tue Oct 20 12:00:00.123456 2026] [security2:error] [pid 1:tid 2] [client 203.0.113.5:51234] ModSecurity: Access denied with code 403 (phase 2). [id "949110"] [msg "Inbound Anomaly Score Exceeded"] [severity "CRITICAL"] [hostname "example.com"] [uri "/index.php"]"#,
             r#"2026/10/20 12:00:00 [error] 1#1: *5 [client 198.51.100.9] ModSecurity: Access denied with code 403 (phase 2). [id "949110"] [severity "0"] [hostname "10.0.0.1"] [uri "/"], client: 198.51.100.9, server: example.com"#,
             r#"{"transaction":{"client_ip":"203.0.113.7","request":{"uri":"/x"},"messages":[{"details":{"ruleId":"942100","severity":"2"}}]}}"#,
+            r#"www.example.com 203.0.113.5 - - [27/Oct/2026:12:00:00 +0300] "GET / HTTP/1.1" 403 199 "-" "ua" YdEaYn8AAQEAAAABcdcAAAAA "-" /20261027/20261027-1200/20261027-120000-YdEaYn8AAQEAAAABcdcAAAAA 0 2345 md5:0123456789abcdef0123456789abcdef"#,
+            "--a1b2c3d4-A--\n[27/Oct/2026:12:00:00 +0300] U 203.0.113.50 51515 10.0.0.1 80\n--a1b2c3d4-H--\nMessage: Access denied with code 403 (phase 2). [id \"942100\"] [msg \"SQLi\"] [severity \"CRITICAL\"]\n--a1b2c3d4-Z--\n",
+            r#"{"transaction":{"remote_address":"203.0.113.9"},"request":{"request_line":"POST /x HTTP/1.1","body":["AAAA…[elided]…AAAA"]},"audit_data":{"messages":["[id "942100"] [msg "m"]"]}}"#,
         ]),
         "dbus" => {
             let mut v = Vec::new();
@@ -361,6 +379,29 @@ mod tests {
             }
             eprintln!("{name}: slowest input {slowest:?}");
         }
+    }
+
+    /// Every input a fuzzer has crashed on (`fuzz/corpus/<target>/regress-*`)
+    /// runs through its target on stable: a fix that regresses fails
+    /// `cargo test`, not only the nightly fuzz job.
+    #[test]
+    fn regression_inputs_from_the_corpus() {
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus");
+        let mut ran = 0;
+        for (name, target) in TARGETS {
+            let Ok(dir) = std::fs::read_dir(corpus.join(name)) else { continue };
+            for e in dir.flatten() {
+                if !e.file_name().to_string_lossy().starts_with("regress-") {
+                    continue;
+                }
+                let input = std::fs::read(e.path()).unwrap();
+                if let Err(err) = std::panic::catch_unwind(|| target(&input)) {
+                    panic!("{name}: {} panics again: {err:?}", e.path().display());
+                }
+                ran += 1;
+            }
+        }
+        assert!(ran >= 4, "the regression inputs were not found under {}", corpus.display());
     }
 
     /// `WARDEN_FUZZ_CORPUS=fuzz/corpus cargo test -p warden-fuzz write_corpus`

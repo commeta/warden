@@ -368,6 +368,18 @@ pub struct FirewallConfig {
     /// Never block these networks (CIDR).
     pub allowlist: Vec<String>,
     pub max_blocked: usize,
+    /// Addresses blocked per hour. Blocks have a budget of their own: an
+    /// attacker rotating through an IPv6 prefix must not use up the budget
+    /// of the actions that contain a compromise (`max_actions_per_hour`).
+    pub max_blocks_per_hour: usize,
+    /// Never block an address that has an established SSH session to this
+    /// host, unless the evidence is about SSH itself and comes from the
+    /// journal: a forged web log line must not lock the administrator out.
+    pub protect_ssh_sessions: bool,
+    /// SSH ports for `protect_ssh_sessions`; empty = the `Port` and
+    /// `ListenAddress` lines of `/etc/ssh/sshd_config` (and its
+    /// `sshd_config.d`), or 22.
+    pub ssh_ports: Vec<u16>,
 }
 
 impl Default for FirewallConfig {
@@ -380,6 +392,9 @@ impl Default for FirewallConfig {
             default_ttl: secs(3600),
             allowlist: strings(&["127.0.0.0/8", "::1/128"]),
             max_blocked: 50_000,
+            max_blocks_per_hour: 10_000,
+            protect_ssh_sessions: true,
+            ssh_ports: vec![],
         }
     }
 }
@@ -392,8 +407,14 @@ pub struct ActionsConfig {
     pub kill_grace: Duration,
     /// Global circuit breaker for process kills.
     pub max_kills_per_hour: usize,
-    /// Global circuit breaker for all destructive actions.
+    /// Global circuit breaker for destructive actions other than `block_ip`
+    /// (which has `firewall.max_blocks_per_hour`).
     pub max_actions_per_hour: usize,
+    /// Of `max_actions_per_hour`, the last ones are kept for containment
+    /// (`kill`, `kill_cgroup`, `freeze_cgroup`, `stop`, `quarantine`,
+    /// `throttle`): hooks, restarts and cleanups cannot use them up. At
+    /// most a quarter of `max_actions_per_hour`.
+    pub containment_reserve: usize,
     /// The same action on the same subject is not repeated within this period.
     #[serde(with = "humantime_serde")]
     pub cooldown: Duration,
@@ -413,6 +434,7 @@ impl Default for ActionsConfig {
             kill_grace: secs(5),
             max_kills_per_hour: 10,
             max_actions_per_hour: 120,
+            containment_reserve: 20,
             cooldown: secs(60),
             quarantine_dir: "/var/lib/warden/quarantine".into(),
             snapshot_dir: "/var/lib/warden/snapshots".into(),
@@ -559,6 +581,13 @@ pub struct MemoryConfig {
     /// something killing processes does not release (tmpfs, shared memory,
     /// kernel slab), and every further kill would only take down a service.
     pub max_kills_per_episode: u32,
+    /// Run the process actions of `on_warning`/`on_critical` (kill, stop,
+    /// freeze, throttle) when only PSI is high and MemAvailable is above
+    /// the warning threshold. Off: memory is not short then — tasks stall
+    /// paging in from a slow disk or swap — and a kill frees nothing that
+    /// helps (the 0.14.1 lab killed a compiler with 69 % of RAM free).
+    /// Snapshots and hooks still run.
+    pub act_on_psi_alone: bool,
     pub trigger: PsiTriggerConfig,
     pub swap_storm: SwapStormConfig,
     pub culprit: CulpritConfig,
@@ -586,6 +615,7 @@ impl Default for MemoryConfig {
             clear_after: secs(60),
             repeat: secs(30),
             max_kills_per_episode: 3,
+            act_on_psi_alone: false,
             trigger: PsiTriggerConfig::default(),
             swap_storm: SwapStormConfig::default(),
             culprit: CulpritConfig::default(),
@@ -1527,7 +1557,8 @@ impl Default for IntegrityConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthSource {
-    /// journald if `journalctl` is available, else the auth log file.
+    /// journald if it runs (it records who sent each line), else the auth
+    /// log file (which does not: see `auth.trust_file`).
     #[default]
     Auto,
     Journal,
@@ -1552,6 +1583,12 @@ pub struct AuthConfig {
     pub alert_root_login: bool,
     pub alert_sudo_failure: bool,
     pub alert_account_changes: bool,
+    /// Block addresses on lines read from the auth log *file*. A syslog
+    /// file does not say who sent a line, and any local user can write
+    /// `sshd[1]: Failed password for root from <address>` into it with
+    /// `logger`: by default such lines are counted and reported, but do not
+    /// block. journald records the sender and is used when it runs.
+    pub trust_file: bool,
 }
 
 impl Default for AuthConfig {
@@ -1568,6 +1605,7 @@ impl Default for AuthConfig {
             alert_root_login: true,
             alert_sudo_failure: true,
             alert_account_changes: true,
+            trust_file: false,
         }
     }
 }
@@ -1698,6 +1736,11 @@ pub struct FimConfig {
     pub correlate_window: Duration,
     /// Block IPs that sent requests correlated with a confirmed infection.
     pub block_attackers: bool,
+    /// Block on a request read from an access log that a non-root user can
+    /// write (nginx on Debian writes its logs as `www-data`; a webshell
+    /// running as that user can add a line naming any address). Off: such
+    /// a request is reported and scored, but does not block by itself.
+    pub trust_writable_logs: bool,
     /// Kill the (web worker) process that wrote malicious content. In a
     /// mass change (`burst_files` within `burst_window`) only the writers
     /// whose own writes matched the signatures are killed; a burst of clean
@@ -1737,6 +1780,7 @@ impl Default for FimConfig {
             trusted_users: vec![],
             correlate_window: secs(30),
             block_attackers: true,
+            trust_writable_logs: false,
             kill_writer: true,
             sites: vec![],
         }
@@ -1821,17 +1865,29 @@ pub enum WafFormat {
     Native,
     /// Apache `error.log` (mod_security2) or nginx `error.log` (ModSecurity-nginx).
     ErrorLog,
+    /// `SecAuditLogType Concurrent`: one file per transaction under
+    /// `storage_dir` (`SecAuditLogStorageDir`), listed in the index file
+    /// `path` (`SecAuditLog`). Without an index (piped to `mlogc`), `path`
+    /// is the storage directory itself and new files are found by scanning.
+    Concurrent,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct WafLog {
+    /// The log file, or a glob for one log per site
+    /// (`/var/log/apache2/*/modsec_audit.log`): new matches are picked up
+    /// while Warden runs.
     pub path: PathBuf,
     #[serde(default)]
     pub format: WafFormat,
     /// FIM site the log belongs to (enables WAF ↔ file-change correlation).
+    /// With a glob, `{1}`, `{2}`… stand for what the 1st, 2nd `*` matched.
     #[serde(default)]
     pub site: Option<String>,
+    /// `format = "concurrent"`: `SecAuditLogStorageDir`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1855,6 +1911,19 @@ pub struct WafConfig {
     pub min_rule_severity: String,
     /// Rule IDs that never count (known false positives on your sites).
     pub ignore_rules: Vec<String>,
+    /// Block on transactions read from a log a non-root user can write
+    /// (ModSecurity-nginx: the workers write the audit log; nginx on Debian
+    /// owns its error log as `www-data`). On by default, because on such
+    /// servers there is no other source; events from such a log say so
+    /// (`log_trust`), `wardenctl doctor` warns, and an address with a live
+    /// SSH session is never blocked on such evidence
+    /// (`actions.firewall.protect_ssh_sessions`).
+    pub trust_writable_logs: bool,
+    /// Also follow the ModSecurity logs that Apache, nginx and Angie are
+    /// configured to write (`SecAuditLog`, `SecAuditLogStorageDir`, the
+    /// error logs where audit logging is piped away), per virtual host,
+    /// re-read every few minutes. `wardenctl waf discover` shows them.
+    pub discover: bool,
 }
 
 impl Default for WafConfig {
@@ -1869,6 +1938,8 @@ impl Default for WafConfig {
             count_detection_only: false,
             min_rule_severity: "critical".into(),
             ignore_rules: vec![],
+            trust_writable_logs: true,
+            discover: true,
         }
     }
 }
@@ -2245,6 +2316,19 @@ impl Config {
             .contains(&self.waf.min_rule_severity.to_ascii_lowercase().as_str())
         {
             errs.push(format!("waf.min_rule_severity {:?} is not a ModSecurity severity", self.waf.min_rule_severity));
+        }
+        for (i, l) in self.waf.logs.iter().enumerate() {
+            if !l.path.is_absolute() {
+                errs.push(format!("waf.log[{i}]: path {:?} must be absolute", l.path));
+            }
+            if let Some(d) = &l.storage_dir {
+                if l.format != WafFormat::Concurrent {
+                    errs.push(format!("waf.log[{i}]: storage_dir is only for format = \"concurrent\""));
+                }
+                if !d.is_absolute() {
+                    errs.push(format!("waf.log[{i}]: storage_dir {d:?} must be absolute"));
+                }
+            }
         }
         if self.waf.block_after == 0 {
             errs.push("waf.block_after must be >= 1".into());

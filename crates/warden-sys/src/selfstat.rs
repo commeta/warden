@@ -238,7 +238,7 @@ pub fn malloc_info() -> Option<MallocInfo> {
 fn rss_bytes() -> Option<u64> {
     let statm = crate::util::read_string("/proc/self/statm").ok()?;
     let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
-    Some(pages * crate::util::page_size())
+    Some(pages.saturating_mul(crate::util::page_size()))
 }
 
 /// Return free heap memory to the OS (after a large scan). Returns how many

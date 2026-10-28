@@ -13,7 +13,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.14.1"
+version = "0.14.2"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -24,10 +24,10 @@ keywords = ["linux", "monitoring", "psi", "security", "daemon"]
 categories = ["command-line-utilities", "os::linux-apis"]
 
 [workspace.dependencies]
-warden-core = { path = "crates/warden-core", version = "0.14.1" }
-warden-sys = { path = "crates/warden-sys", version = "0.14.1" }
-warden-detect = { path = "crates/warden-detect", version = "0.14.1" }
-warden-respond = { path = "crates/warden-respond", version = "0.14.1" }
+warden-core = { path = "crates/warden-core", version = "0.14.2" }
+warden-sys = { path = "crates/warden-sys", version = "0.14.2" }
+warden-detect = { path = "crates/warden-detect", version = "0.14.2" }
+warden-respond = { path = "crates/warden-respond", version = "0.14.2" }
 
 anyhow = "1"
 thiserror = "2"

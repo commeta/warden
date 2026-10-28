@@ -74,6 +74,46 @@ impl SlidingWindow {
     }
 }
 
+/// Keys a [`Cooldown`] or [`KeyedWindow`] keeps at most unless told
+/// otherwise. Keys are client addresses more often than not, and an
+/// attacker with an IPv6 prefix has as many as he likes: within one period
+/// all of them are live, so expiry alone does not bound the table (N3).
+pub const DEFAULT_CAPACITY: usize = 100_000;
+
+/// Shrink `map` to at most `keep` entries, dropping the lowest `rank`
+/// first (the oldest, the least used). O(n): call it rarely — on growth
+/// past a capacity, evicting a tenth more than needed, so a flood of new
+/// keys pays O(1) per key on average.
+pub fn evict_lowest<K: Eq + Hash + Clone, V, R: Ord + Copy>(
+    map: &mut HashMap<K, V>,
+    keep: usize,
+    rank: impl Fn(&V) -> R,
+) -> usize {
+    let n = map.len();
+    if n <= keep {
+        return 0;
+    }
+    let drop = n - keep;
+    let mut ranks: Vec<R> = map.values().map(&rank).collect();
+    let (_, cut, _) = ranks.select_nth_unstable(drop - 1);
+    let cut = *cut;
+    map.retain(|_, v| rank(v) >= cut);
+    // ties at the cut: keep as many of them as fit
+    let excess = map.len().saturating_sub(keep);
+    if excess > 0 {
+        let doomed: Vec<K> = map.iter().filter(|(_, v)| rank(v) == cut).map(|(k, _)| k.clone()).take(excess).collect();
+        for k in doomed {
+            map.remove(&k);
+        }
+    }
+    n - map.len()
+}
+
+/// The size a table is cut back to when it outgrows `cap`.
+fn shrink_target(cap: usize) -> usize {
+    cap - cap / 10
+}
+
 /// Per-key cooldown.
 #[derive(Debug, Clone)]
 pub struct Cooldown<K: Eq + Hash> {
@@ -83,13 +123,26 @@ pub struct Cooldown<K: Eq + Hash> {
     /// after each pass, so a flood of distinct keys costs O(1) per call
     /// instead of a full scan on every insert).
     gc_at: usize,
+    /// At most this many keys: past it the oldest are forgotten (they may
+    /// fire again early, which beats growing without bound).
+    cap: usize,
+    evicted: u64,
 }
 
 const GC_MIN: usize = 4096;
 
 impl<K: Eq + Hash + Clone> Cooldown<K> {
     pub fn new(period: Duration) -> Self {
-        Self { period, last: HashMap::new(), gc_at: GC_MIN }
+        Self::with_capacity(period, DEFAULT_CAPACITY)
+    }
+
+    pub fn with_capacity(period: Duration, cap: usize) -> Self {
+        Self { period, last: HashMap::new(), gc_at: GC_MIN.min(cap.max(1)), cap: cap.max(1), evicted: 0 }
+    }
+
+    /// Keys forgotten before their period ended, because of the capacity.
+    pub fn evicted(&self) -> u64 {
+        self.evicted
     }
 
     /// Returns true (and arms the cooldown) if the key is not cooling down.
@@ -114,6 +167,9 @@ impl<K: Eq + Hash + Clone> Cooldown<K> {
         if self.last.len() > self.gc_at {
             self.gc(now);
         }
+        if self.last.len() > self.cap {
+            self.evicted += evict_lowest(&mut self.last, shrink_target(self.cap), |t| *t) as u64;
+        }
     }
 
     pub fn set_period(&mut self, p: Duration) {
@@ -123,7 +179,7 @@ impl<K: Eq + Hash + Clone> Cooldown<K> {
     pub fn gc(&mut self, now: Instant) {
         let p = self.period;
         self.last.retain(|_, t| now.saturating_duration_since(*t) < p);
-        self.gc_at = (self.last.len() * 2).max(GC_MIN);
+        self.gc_at = (self.last.len() * 2).max(GC_MIN).min(self.cap);
     }
 
     pub fn len(&self) -> usize {
@@ -141,6 +197,11 @@ pub struct KeyedWindow<K: Eq + Hash> {
     window: Duration,
     map: HashMap<K, VecDeque<Instant>>,
     gc_at: usize,
+    /// At most this many keys. Past it, the keys with the fewest hits (and
+    /// of those the quietest) are forgotten first: a flood of one-off
+    /// addresses must not push out the count of a patient attacker.
+    cap: usize,
+    evicted: u64,
 }
 
 /// Hits remembered per key: thresholds are far lower, and a flood from one
@@ -149,7 +210,25 @@ const MAX_PER_KEY: usize = 4096;
 
 impl<K: Eq + Hash + Clone> KeyedWindow<K> {
     pub fn new(window: Duration) -> Self {
-        Self { window, map: HashMap::new(), gc_at: 65_536 }
+        Self::with_capacity(window, DEFAULT_CAPACITY)
+    }
+
+    pub fn with_capacity(window: Duration, cap: usize) -> Self {
+        let cap = cap.max(1);
+        Self { window, map: HashMap::new(), gc_at: 65_536.min(cap), cap, evicted: 0 }
+    }
+
+    /// Keys forgotten while still inside the window, because of the capacity.
+    pub fn evicted(&self) -> u64 {
+        self.evicted
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 
     /// Add a hit and return the number of hits for the key inside the window.
@@ -168,6 +247,10 @@ impl<K: Eq + Hash + Clone> KeyedWindow<K> {
         if self.map.len() > self.gc_at {
             self.gc(now);
         }
+        if self.map.len() > self.cap {
+            let keep = shrink_target(self.cap);
+            self.evicted += evict_lowest(&mut self.map, keep, |q| (q.len(), q.back().copied())) as u64;
+        }
         n
     }
 
@@ -178,7 +261,7 @@ impl<K: Eq + Hash + Clone> KeyedWindow<K> {
     pub fn gc(&mut self, now: Instant) {
         let w = self.window;
         self.map.retain(|_, q| q.back().is_some_and(|b| now.saturating_duration_since(*b) < w));
-        self.gc_at = (self.map.len() * 2).max(65_536);
+        self.gc_at = (self.map.len() * 2).max(65_536).min(self.cap);
     }
 }
 
@@ -300,5 +383,48 @@ mod tests {
             w.add(1, now);
         }
         assert_eq!(w.add(1, now), MAX_PER_KEY);
+    }
+
+    /// N3: within one period every key of a flood is live, so expiry alone
+    /// bounded nothing. The tables now stop at their capacity...
+    #[test]
+    fn live_keys_are_capped() {
+        let t0 = Instant::now();
+        let mut c: Cooldown<u32> = Cooldown::with_capacity(Duration::from_secs(3600), 1000);
+        for i in 0..50_000u32 {
+            c.arm(&i, t0 + Duration::from_millis(u64::from(i)));
+        }
+        assert!(c.len() <= 1000, "{}", c.len());
+        assert!(c.evicted() >= 49_000);
+        // the newest keys are the ones kept
+        assert!(c.cooling(&49_999, t0 + Duration::from_secs(60)));
+        assert!(!c.cooling(&1, t0 + Duration::from_secs(60)));
+    }
+
+    /// ...and a flood of one-off keys does not push out a patient attacker
+    /// on his way to the threshold.
+    #[test]
+    fn a_flood_of_one_off_keys_does_not_evict_a_repeat_offender() {
+        let t0 = Instant::now();
+        let mut w: KeyedWindow<u32> = KeyedWindow::with_capacity(Duration::from_secs(600), 1000);
+        let slow = u32::MAX;
+        for _ in 0..3 {
+            w.add(slow, t0);
+        }
+        for i in 0..20_000u32 {
+            w.add(i, t0 + Duration::from_millis(u64::from(i) * 10));
+            assert!(w.len() <= 1000);
+        }
+        assert_eq!(w.add(slow, t0 + Duration::from_secs(201)), 4, "the repeat offender's count survived");
+        assert!(w.evicted() > 0);
+    }
+
+    #[test]
+    fn evict_lowest_keeps_exactly_the_highest() {
+        let mut m: HashMap<u32, u32> = (0..100).map(|i| (i, i % 10)).collect();
+        assert_eq!(evict_lowest(&mut m, 25, |v| *v), 75);
+        assert_eq!(m.len(), 25);
+        assert!(m.values().all(|v| *v >= 7), "only the three highest ranks (and some ties) remain");
+        assert_eq!(evict_lowest(&mut m, 30, |v| *v), 0);
     }
 }

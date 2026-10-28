@@ -184,6 +184,8 @@ pub struct AccessRing {
     /// Requests per path in the ring; its keys are the shared paths.
     counts: HashMap<Arc<str>, u32>,
     next_seq: u64,
+    /// Why a web account can write this site's access log, if it can.
+    writable: Option<String>,
 }
 
 /// Bounds of the per-site ring: the correlation looks seconds to minutes
@@ -193,6 +195,12 @@ const RING_CAP: usize = 50_000;
 const RING_AGE_SECS: i64 = 15 * 60;
 
 impl AccessRing {
+    /// Why a web account can write the log these requests come from: a
+    /// request read from it may be a webshell's invention.
+    pub fn writable_by_web(&self) -> Option<&str> {
+        self.writable.as_deref()
+    }
+
     pub fn push(&mut self, r: Request) {
         let now =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
@@ -300,7 +308,14 @@ impl AccessLogs {
     pub fn with<R>(&self, site: &str, f: impl FnOnce(&AccessRing) -> R) -> Option<R> {
         lock(&self.sites).get(site).map(f)
     }
+
+    pub fn set_writable(&self, site: &str, why: Option<String>) {
+        lock(&self.sites).entry(site.to_owned()).or_default().writable = why;
+    }
 }
+
+/// How often the ownership and mode of a log are looked at again.
+pub const TRUST_RECHECK: Duration = Duration::from_secs(60);
 
 /// Sensor: tail every configured access log into the rings.
 pub fn run_access_tail(shared: &Arc<Shared>) -> Result<(), String> {
@@ -312,6 +327,8 @@ pub fn run_access_tail(shared: &Arc<Shared>) -> Result<(), String> {
     }
     let generation = shared.generation();
     let mut tails: Vec<(String, FileTail)> = logs.into_iter().map(|(n, p)| (n, FileTail::new(p))).collect();
+    let web = crate::util::WebPrincipals::load(&cfg.process.web_users);
+    let mut checked: Option<std::time::Instant> = None;
     shared.set_sensor("access_log", SensorState::Running);
     loop {
         if shared.generation() != generation {
@@ -319,6 +336,12 @@ pub fn run_access_tail(shared: &Arc<Shared>) -> Result<(), String> {
         }
         if shared.is_shutting_down() {
             return Ok(());
+        }
+        if checked.is_none_or(|t| t.elapsed() >= TRUST_RECHECK) {
+            checked = Some(std::time::Instant::now());
+            for (site, t) in &tails {
+                shared.access.set_writable(site, web.can_write(t.path()));
+            }
         }
         for (site, t) in tails.iter_mut() {
             for line in t.poll(20_000) {

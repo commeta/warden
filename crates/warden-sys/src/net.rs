@@ -157,6 +157,74 @@ pub fn tcp_sockets() -> Vec<Socket> {
     v
 }
 
+/// Ports sshd listens on, from `sshd_config` text: `Port` lines and the
+/// ports of `ListenAddress` lines (`host:port`, `[v6]:port`). Keywords are
+/// case-insensitive and may be followed by `=`.
+pub fn parse_sshd_ports(text: &str) -> Vec<u16> {
+    let mut ports = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let (key, rest) = match line.split_once(|c: char| c.is_whitespace() || c == '=') {
+            Some((k, r)) => (k, r.trim_start_matches(|c: char| c.is_whitespace() || c == '=').trim()),
+            None => continue,
+        };
+        let value = rest.split_whitespace().next().unwrap_or("");
+        let port = if key.eq_ignore_ascii_case("port") {
+            value.parse().ok()
+        } else if key.eq_ignore_ascii_case("listenaddress") {
+            // `1.2.3.4:2222`, `[::1]:2222`; a bare address has no port
+            match value.rsplit_once(':') {
+                Some((host, p)) if value.starts_with('[') && host.ends_with(']') => p.parse().ok(),
+                Some((host, p)) if !host.contains(':') => p.parse().ok(),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(p) = port
+            && p > 0
+            && !ports.contains(&p)
+        {
+            ports.push(p);
+        }
+    }
+    ports
+}
+
+/// Ports of the local sshd: `/etc/ssh/sshd_config` and the files of
+/// `/etc/ssh/sshd_config.d/`, or 22.
+pub fn sshd_ports() -> Vec<u16> {
+    let mut text = read_string("/etc/ssh/sshd_config").unwrap_or_default();
+    if let Ok(dir) = std::fs::read_dir("/etc/ssh/sshd_config.d") {
+        let mut files: Vec<_> =
+            dir.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "conf")).collect();
+        files.sort();
+        for f in files {
+            if let Ok(t) = std::fs::read_to_string(f) {
+                text.push('\n');
+                text.push_str(&t);
+            }
+        }
+    }
+    let ports = parse_sshd_ports(&text);
+    if ports.is_empty() { vec![22] } else { ports }
+}
+
+/// Remote addresses with an established TCP connection to one of `ports`.
+pub fn established_peers(sockets: &[Socket], ports: &[u16]) -> HashSet<IpAddr> {
+    sockets
+        .iter()
+        .filter(|s| s.state == TCP_ESTABLISHED && ports.contains(&s.local.port()))
+        .map(|s| match s.remote.ip() {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
+            v4 => v4,
+        })
+        .collect()
+}
+
 /// Map socket inodes to owning PIDs (scans /proc/*/fd; call sparingly).
 pub fn socket_owners(inodes: &HashSet<u64>) -> HashMap<u64, i32> {
     let mut out = HashMap::new();
@@ -213,5 +281,19 @@ mod tests {
         let s6 = "hdr\n   0: 00000000000000000000000001000000:0050 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 999 1\n";
         let v6 = parse_tcp(s6);
         assert_eq!(v6[0].local, "[::1]:80".parse().unwrap());
+    }
+
+    #[test]
+    fn sshd_ports_from_config() {
+        let cfg = "# Port 2200\nPort 22\nport=2222\nListenAddress 0.0.0.0\nListenAddress [::]:2223\nListenAddress 10.0.0.1:2224\nListenAddress ::1\nMatch User x\n";
+        assert_eq!(parse_sshd_ports(cfg), vec![22, 2222, 2223, 2224]);
+        assert!(parse_sshd_ports("Port\nPort x\nPort 0").is_empty());
+    }
+
+    #[test]
+    fn established_peers_by_local_port() {
+        let tcp6 = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 0000000000000000FFFF00000100007F:0016 0000000000000000FFFF00000500A8C0:C350 01 00000000:00000000 00:00000000 00000000     0        0 1 1\n   1: 0000000000000000FFFF00000100007F:0050 0000000000000000FFFF00000600A8C0:C351 01 00000000:00000000 00:00000000 00000000     0        0 2 1\n";
+        let peers = established_peers(&parse_tcp(tcp6), &[22]);
+        assert_eq!(peers.into_iter().collect::<Vec<_>>(), vec!["192.168.0.5".parse::<IpAddr>().unwrap()]);
     }
 }

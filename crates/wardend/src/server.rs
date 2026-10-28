@@ -116,6 +116,7 @@ pub async fn handle(ctx: &Ctx, req: Request) -> Response {
                 "events_in_memory": lock(&ctx.ring).len(),
                 "events_dropped": shared.dropped_events.load(Ordering::Relaxed),
                 "fim_sites": cfg.fim.sites.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+                "waf_sources": *lock(&shared.waf_sources),
                 "policies": cfg.policies.len(),
                 "lineage": {"pairs": lineage.pairs(), "learning": lineage.learning(), "learning_remaining_seconds": lineage.learning_remaining().as_secs()},
                 "heuristics_max_score": lock(&shared.heuristics).max_score(warden_sys::clock::now()),
@@ -366,6 +367,12 @@ pub fn bind_control(path: &std::path::Path) -> io::Result<UnixListener> {
         return Err(e);
     }
     Ok(listener)
+}
+
+/// Device and inode of a path (not following a symlink).
+pub fn file_id(path: &std::path::Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path).ok().map(|m| (m.dev(), m.ino()))
 }
 
 pub async fn control_server(ctx: Ctx, listener: UnixListener) {

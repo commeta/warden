@@ -568,9 +568,17 @@ impl IntegrityDetector {
             } else {
                 Severity::Warning
             };
-            let mode = std::fs::metadata(p).map(|m| format!("{:o}", m.mode() & 0o7777)).unwrap_or_default();
+            // The file can be gone by now (a dropper that runs its SUID copy
+            // and deletes it, a test that cleans up): say so instead of an
+            // empty "(mode )" as 0.14.1 did.
+            let mode = std::fs::symlink_metadata(p).map(|m| format!("{:o}", m.mode() & 0o7777)).ok();
+            let title = match &mode {
+                Some(m) => format!("new SUID/SGID file: {p} (mode {m})"),
+                None => format!("new SUID/SGID file: {p} (already removed)"),
+            };
             cx.emit(
-                Event::new("security.new_suid", sev, format!("new SUID/SGID file: {p} (mode {mode})"))
+                Event::new("security.new_suid", sev, title)
+                    .detail("removed", mode.is_none())
                     .subject(Subject::File { path: p.clone(), site: None })
                     .fingerprint(format!("security.new_suid:{p}"))
                     .detail("dpkg_verified", dpkg)

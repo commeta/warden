@@ -74,6 +74,53 @@ pub fn stat() -> io::Result<Stat> {
     Ok(parse_stat(&read_string("/proc/stat")?))
 }
 
+/// CPU time the hypervisor gave to others while this machine's vCPUs were
+/// runnable (`steal` of the `cpu` line of `/proc/stat`), in clock ticks
+/// summed over all CPUs. Only the first line is parsed.
+pub fn steal_ticks() -> Option<u64> {
+    use std::io::Read;
+    let mut buf = [0u8; 512];
+    let n = std::fs::File::open("/proc/stat").and_then(|mut f| f.read(&mut buf)).ok()?;
+    let text = std::str::from_utf8(&buf[..n]).ok()?;
+    let line = text.lines().next()?;
+    let mut it = line.split_whitespace();
+    (it.next()? == "cpu").then_some(())?;
+    it.nth(7)?.parse().ok()
+}
+
+/// Is this a virtual machine? The `hypervisor` CPU flag (x86), a Xen
+/// `/sys/hypervisor`, or a DMI vendor of the usual hypervisors.
+pub fn is_virtualized() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        let flag = read_string("/proc/cpuinfo")
+            .map(|c| c.lines().any(|l| l.starts_with("flags") && l.split_whitespace().any(|f| f == "hypervisor")))
+            .unwrap_or(false);
+        let xen = std::path::Path::new("/sys/hypervisor/type").exists();
+        let dmi = ["/sys/class/dmi/id/sys_vendor", "/sys/class/dmi/id/product_name"].iter().any(|p| {
+            read_string(p).is_ok_and(|v| {
+                let v = v.to_ascii_lowercase();
+                [
+                    "qemu",
+                    "kvm",
+                    "vmware",
+                    "virtualbox",
+                    "innotek",
+                    "xen",
+                    "microsoft corporation",
+                    "parallels",
+                    "bochs",
+                    "amazon ec2",
+                    "google compute",
+                ]
+                .iter()
+                .any(|h| v.contains(h))
+            })
+        });
+        flag || xen || dmi
+    })
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
 pub struct LoadAvg {
     pub one: f64,
@@ -164,5 +211,11 @@ mod tests {
         assert_eq!(parse_kernel_version("6.6"), Some((6, 6)));
         assert_eq!(parse_kernel_version("garbage"), None);
         assert!((6, 18) >= (6, 6) && (5, 19) < (6, 6));
+    }
+
+    #[test]
+    fn steal_is_read_from_the_first_line() {
+        assert!(steal_ticks().is_some(), "/proc/stat has a cpu line with a steal column");
+        let _ = is_virtualized();
     }
 }

@@ -207,6 +207,8 @@ pub struct Shared {
     pub culprits: Mutex<Vec<crate::memory::Culprit>>,
     pub access: crate::fim::correlate::AccessLogs,
     pub waf: crate::waf::WafRecent,
+    /// The logs the WAF sensor follows (for `wardenctl status` and `doctor`).
+    pub waf_sources: Mutex<serde_json::Value>,
     /// Real-time SUID sensor ↔ integrity detector.
     pub suid_rt: Mutex<crate::integrity::SuidRealtime>,
     /// Failed systemd units, shared by the D-Bus sensor and the polling detector.
@@ -261,6 +263,7 @@ impl Shared {
             culprits: Mutex::new(Vec::new()),
             access: Default::default(),
             waf: Default::default(),
+            waf_sources: Mutex::new(serde_json::json!({ "sources": [], "problems": [] })),
             suid_rt: Mutex::new(Default::default()),
             systemd: Mutex::new(Default::default()),
             advice: Mutex::new(serde_json::Value::Array(Vec::new())),
@@ -665,6 +668,7 @@ impl Scheduler {
         let mut slots = self.build(&cfg);
         tracing::info!(scheduler = self.name, detectors = ?slots.iter().map(|s| s.det.name()).collect::<Vec<_>>(), "scheduler started");
         let mut last_stall_report: Option<Instant> = None;
+        let mut steal_before: Option<u64> = None;
 
         loop {
             if self.shared.is_shutting_down() {
@@ -708,6 +712,9 @@ impl Scheduler {
             let planned = now + wait;
 
             let mut forced: Option<&'static str> = None;
+            if self.stall_detection && cfg.stall.enabled {
+                steal_before = warden_sys::system::steal_ticks();
+            }
             match self.wake_rx.recv_timeout(wait) {
                 Ok(Wake::Shutdown) => break,
                 Ok(Wake::Reload) => continue,
@@ -715,7 +722,14 @@ impl Scheduler {
                 Err(RecvTimeoutError::Timeout) => {
                     let lag = Instant::now().saturating_duration_since(planned);
                     if self.stall_detection {
-                        self.check_stall(&cfg, lag, &mut last_stall_report);
+                        // CPU time the hypervisor gave away while we waited,
+                        // per CPU (the `cpu` line sums all of them)
+                        let steal = steal_before.zip(warden_sys::system::steal_ticks()).map(|(a, b)| {
+                            b.saturating_sub(a) as f64
+                                / warden_sys::util::clk_tck() as f64
+                                / warden_sys::util::nproc().max(1) as f64
+                        });
+                        self.check_stall(&cfg, lag, steal, &mut last_stall_report);
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => std::thread::sleep(wait),
@@ -763,7 +777,7 @@ impl Scheduler {
         tracing::info!(scheduler = self.name, "scheduler stopped");
     }
 
-    fn check_stall(&self, cfg: &Config, lag: Duration, last: &mut Option<Instant>) {
+    fn check_stall(&self, cfg: &Config, lag: Duration, steal: Option<f64>, last: &mut Option<Instant>) {
         let sc = &cfg.stall;
         self.shared.metrics.set("warden_scheduler_lag_seconds", &[("scheduler", self.name)], lag.as_secs_f64());
         if !sc.enabled || lag < sc.threshold {
@@ -774,24 +788,97 @@ impl Scheduler {
             return;
         }
         *last = Some(Instant::now());
-        let sev = if lag >= sc.critical { Severity::Critical } else { Severity::Warning };
-        let mut ev = Event::new(
-            "system.stall",
-            sev,
-            format!("host was unresponsive for {:.1}s (scheduler wake-up delayed)", lag.as_secs_f64()),
-        )
-        .source("stall")
-        .fingerprint("system.stall")
-        .detail("stall_seconds", lag.as_secs_f64())
-        .actions(sc.actions.clone());
-        if let Ok(p) = warden_sys::psi::read(warden_sys::psi::Resource::Memory) {
-            ev = ev.detail("psi_memory_full_avg10", p.full.map(|f| f.avg10).unwrap_or(0.0));
+        let psi = |r, full: bool| {
+            warden_sys::psi::read(r)
+                .ok()
+                .map(|p| if full { p.full.map(|f| f.avg10).unwrap_or(0.0) } else { p.some.avg10 })
+        };
+        let (cpu, memory, io) = (
+            psi(warden_sys::psi::Resource::Cpu, false),
+            psi(warden_sys::psi::Resource::Memory, true),
+            psi(warden_sys::psi::Resource::Io, true),
+        );
+        let cause = stall_cause(lag, steal, [cpu, memory, io], warden_sys::system::is_virtualized());
+        let secs = lag.as_secs_f64();
+        let (sev, title, actions) = match cause {
+            StallCause::Host => (
+                if lag >= sc.critical { Severity::Critical } else { Severity::Warning },
+                format!("host was unresponsive for {secs:.1}s (scheduler wake-up delayed)"),
+                sc.actions.clone(),
+            ),
+            // The machine did not run, nothing on it was starved: a snapshot
+            // would show a calm host, and one per pause pushed the snapshots
+            // of real incidents out (the 0.14.1 lab: 25 of 32).
+            StallCause::Steal => (
+                Severity::Notice,
+                format!(
+                    "VM did not run for {secs:.1}s: the hypervisor gave its CPUs to others ({:.1}s of steal)",
+                    steal.unwrap_or(0.0)
+                ),
+                Vec::new(),
+            ),
+            StallCause::Paused => (
+                Severity::Notice,
+                format!("VM did not run for {secs:.1}s (paused by the hypervisor or its host; no pressure inside)"),
+                Vec::new(),
+            ),
+        };
+        let mut ev = Event::new("system.stall", sev, title)
+            .source("stall")
+            .fingerprint(if cause == StallCause::Host { "system.stall".into() } else { "system.stall:vm".to_owned() })
+            .detail("stall_seconds", secs)
+            .detail("cause", cause.name())
+            .actions(actions);
+        if let Some(s) = steal {
+            ev = ev.detail("steal_seconds", (s * 100.0).round() / 100.0);
         }
-        if let Ok(p) = warden_sys::psi::read(warden_sys::psi::Resource::Io) {
-            ev = ev.detail("psi_io_full_avg10", p.full.map(|f| f.avg10).unwrap_or(0.0));
+        if let Some(v) = cpu {
+            ev = ev.detail("psi_cpu_some_avg10", v);
+        }
+        if let Some(v) = memory {
+            ev = ev.detail("psi_memory_full_avg10", v);
+        }
+        if let Some(v) = io {
+            ev = ev.detail("psi_io_full_avg10", v);
         }
         self.sink.emit(ev);
     }
+}
+
+/// Why the scheduler woke up late.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StallCause {
+    /// Something on the machine held it up (or nothing explains it on
+    /// bare metal): worth a warning and a snapshot.
+    Host,
+    /// The hypervisor ran other guests on our CPUs (steal time).
+    Steal,
+    /// A virtual machine that did not run at all, with no pressure inside:
+    /// paused by the hypervisor, its host suspended or migrating.
+    Paused,
+}
+
+impl StallCause {
+    pub fn name(self) -> &'static str {
+        match self {
+            StallCause::Host => "host",
+            StallCause::Steal => "hypervisor_steal",
+            StallCause::Paused => "vm_paused",
+        }
+    }
+}
+
+/// PSI avg10 below this (percent) on every resource is "no pressure".
+const CALM_PSI: f64 = 5.0;
+
+/// Classify a late wake-up of `lag`: steal covering half of it is the
+/// hypervisor; on a VM, a stall without any pressure inside is a pause.
+pub fn stall_cause(lag: Duration, steal: Option<f64>, psi: [Option<f64>; 3], virtualized: bool) -> StallCause {
+    if steal.is_some_and(|s| s >= lag.as_secs_f64() / 2.0) {
+        return StallCause::Steal;
+    }
+    let calm = psi.iter().all(|p| p.is_some_and(|v| v < CALM_PSI));
+    if virtualized && calm { StallCause::Paused } else { StallCause::Host }
 }
 
 pub fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {
@@ -939,6 +1026,21 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    /// The 0.14.1 lab: 21 stalls of 5–21 s in 40 idle hours on a VM with
+    /// PSI near zero, each with a snapshot. They are pauses of the VM.
+    #[test]
+    fn a_calm_vm_that_did_not_run_was_paused() {
+        let lag = Duration::from_secs_f64(5.6);
+        let calm = [Some(0.4), Some(0.0), Some(0.16)];
+        assert_eq!(stall_cause(lag, Some(0.0), calm, true), StallCause::Paused);
+        assert_eq!(stall_cause(lag, Some(4.0), calm, true), StallCause::Steal);
+        // pressure inside the VM, or bare metal: the host itself froze
+        assert_eq!(stall_cause(lag, Some(0.0), [Some(0.4), Some(36.9), Some(85.0)], true), StallCause::Host);
+        assert_eq!(stall_cause(lag, None, calm, false), StallCause::Host);
+        // PSI unreadable: not "calm"
+        assert_eq!(stall_cause(lag, None, [None, None, None], true), StallCause::Host);
+    }
     use super::*;
 
     #[test]

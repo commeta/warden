@@ -329,8 +329,12 @@ async fn run(args: Args, cfg: Config, files: Vec<String>) -> Result<()> {
         dry_run: dry_run.clone(),
     };
     let socket_path = cfg.daemon.control_socket.clone();
+    // which socket file is ours: a daemon started while this one stops has
+    // already put its own there, and must not lose it to our cleanup
+    let mut socket_id = None;
     match server::bind_control(&socket_path) {
         Ok(listener) => {
+            socket_id = server::file_id(&socket_path);
             tokio::spawn(server::control_server(ctx, listener));
         }
         Err(e) => tracing::error!(socket = %socket_path.display(), error = %e, "cannot create the control socket"),
@@ -489,7 +493,9 @@ async fn run(args: Args, cfg: Config, files: Vec<String>) -> Result<()> {
     if !busy.is_empty() || responder_busy {
         tracing::warn!(components = ?busy, responder_busy, "stopping with threads still busy");
     }
-    let _ = std::fs::remove_file(&shared.config().daemon.control_socket);
+    if socket_id.is_some() && server::file_id(&socket_path) == socket_id {
+        let _ = std::fs::remove_file(&socket_path);
+    }
     Ok(())
 }
 

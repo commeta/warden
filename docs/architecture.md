@@ -1,18 +1,18 @@
-# Warden — Архитектура
+# Warden — Architecture
 
-## Обзор
+## Overview
 
-Warden — это один демон (`wardend`) плюс управляющий CLI (`wardenctl`). Демон
-запускает набор **детекторов** и **сенсоров**, которые только порождают
-`Event`'ы. События проходят через **движок**, который применяет политики оператора,
-дедуплицирует, журналирует, считает очки и уведомляет, а затем передаёт прикреплённые
-**действия** в **responder**, который исполняет их под строгими правилами безопасности.
+Warden is a single daemon (`wardend`) plus a control CLI (`wardenctl`). The
+daemon runs a set of **detectors** and **sensors** that only ever produce
+`Event`s. Events flow through an **engine** that applies operator policy,
+deduplicates, journals, scores and notifies, and finally hands any attached
+**actions** to a **responder** that executes them under strict safety rules.
 
 ```
-                       ┌─────────────────────────────────────────────────┐
-  интерфейсы ядра      │                   wardend                       │
-  /proc /sys /dev/kmsg │                                                 │
-  netlink  fanotify    │   detectors ─┐                                  │
+                       ┌───────────────────────────────────────────────┐
+  kernel interfaces    │                   wardend                      │
+  /proc /sys /dev/kmsg │                                                │
+  netlink  fanotify    │   detectors ─┐                                 │
   pidfd  cgroup v2 ────┼─▶  sensors  ─┼─▶ Sink ─▶ bounded queue ─▶ Engine│
                        │              │                        │         │
                        │              │        policy · dedup ·│journal  │
@@ -26,224 +26,224 @@ Warden — это один демон (`wardend`) плюс управляющи�
                        │                                                 │
                        │   control.sock (root) ◀── wardenctl             │
                        │   127.0.0.1:9184 /metrics /health               │
-                       └─────────────────────────────────────────────────┘
+                       └───────────────────────────────────────────────┘
 ```
 
-## Крейты
+## Crates
 
-| крейт | ответственность | зависит от |
+| crate | responsibility | depends on |
 |---|---|---|
-| `warden-core` | модель конфига, модель событий, действия, политики, гистерезис, rate limiting, протокол управления | — |
-| `warden-sys` | обёртки интерфейсов Linux (PSI, procfs, pidfd, cgroup, kmsg, netlink, fanotify, хелперы nftables) | `libc` |
-| `warden-detect` | детекторы, сенсоры, FIM, эвристики, рантайм планировщика/супервизора | core, sys |
-| `warden-respond` | защищённое реагирование (kill, очистка, карантин, фаервол, снимки) | core, sys |
-| `wardend` | демон: движок, журнал событий, уведомления, серверы управления и метрик | все |
-| `wardenctl` | управляющий CLI и офлайн-диагностика (`doctor`, `psi`, `mem-top`, `scan`) | core, sys, detect |
+| `warden-core` | config model, event model, actions, policy, hysteresis, rate limiting, control protocol | — |
+| `warden-sys` | Linux interface wrappers (PSI, procfs, pidfd, cgroup, kmsg, netlink, fanotify, nftables helpers) | `libc` |
+| `warden-detect` | detectors, sensors, FIM, heuristics, the scheduler/supervisor runtime | core, sys |
+| `warden-respond` | guarded remediation (kill, cleanup, quarantine, firewall, snapshots) | core, sys |
+| `wardend` | the daemon: engine, event log, notifications, control + metrics servers | all |
+| `wardenctl` | control CLI and offline diagnostics (`doctor`, `psi`, `mem-top`, `scan`) | core, sys, detect |
 
-Такое разделение держит привилегированный, выполняющий побочные эффекты код (`warden-respond`) малым
-и отдельно тестируемым, а `warden-core` остаётся чистым (без I/O), так что его
-логика — пороги, политики, скоринг — исчерпывающе покрыта юнит-тестами.
+The split keeps the privileged, side-effecting code (`warden-respond`) small
+and separately testable, and lets `warden-core` stay pure (no I/O) so its
+logic — thresholds, policy, scoring — is exhaustively unit-tested.
 
-## Модель потоков
+## Threading model
 
-Работает только то, что включает конфигурация. Каждый модуль, которому нужен поток, —
-это *компонент* с предикатом `wanted(config)` (`warden_detect::COMPONENTS`):
-у выключенного модуля **нет потока, нет таймера, нет буферов и нет скомпилированных
-правил**. После reload супервизор запускает новые включённые компоненты, а
-компоненты, которые больше не нужны, останавливаются сами (под блокировкой
-реестра, так что параллельное повторное включение никогда не теряется).
+Only what the configuration enables runs. Each module that needs a thread is
+a *component* with a `wanted(config)` predicate (`warden_detect::COMPONENTS`):
+a disabled module has **no thread, no timer, no buffers and no compiled
+rules**. After a reload the supervisor starts newly enabled components, and
+components that are no longer wanted stop themselves (under the registry
+lock, so a concurrent re-enable can never be lost).
 
-* **Быстрый планировщик** (всегда) — память, CPU, I/O, лимиты, сеть, железо,
-  состояние ядра. Он же **детектор зависаний** (1-секундные сны, опоздание которых
-  измеряется), а его heartbeat питает watchdog systemd; при
-  `stall.enabled = false` он просыпается только раз в 5 с.
-* **Медленный планировщик** — диск, скан процессов, целостность, юниты systemd, тюнинг;
-  **планировщик health** — пробы HTTP/TCP/командой (зависший endpoint не может задержать
-  проверки диска). Планировщики спят до ближайшего срока детектора — никакого фиксированного
-  опроса — и будятся немедленно при reload.
-* **Сенсоры на событиях**, по одному супервизируемому потоку каждый: триггер PSI,
-  `/dev/kmsg`, netlink proc connector, тейлер auth, вотчеры fanotify
-  (веб-FIM; SUID/SGID по меткам файловой системы), подписка systemd по D-Bus,
-  тейлеры access-log и ModSecurity, воркер FIM. Блокирующие
-  чтения используют `poll()` с таймаутом, так что reload или остановка замечаются в пределах
-  2 с даже на тихом хосте; reload перезапускает сенсор сразу (это не
-  считается отказом).
-* **Движок, управляющий сокет и endpoint метрик** делят главный поток
-  (current-thread runtime tokio); небольшой blocking pool обслуживает медленные запросы
-  управления. Журнал событий имеет собственный поток-писатель (ограниченная очередь):
-  запись на полный или зависший диск никогда не держит движок, `status` или
-  `/health`. Состояние плоскости управления (карантин, тюнинг, предохранители) живёт
-  в `Handles`, отдельно от исполнителя, так что `status`, `quarantine_*`,
-  `tuning`, `/health` и остановка никогда не ждут выполняющееся действие или хук.
-  Циклы accept повторяют при ошибках, паузятся при исчерпании дескрипторов и ограничивают
-  одновременных клиентов.
-* **Responder**, две супервизируемые полосы, и **нотификатор**, каждый — поток
-  с ограниченной очередью. События, чьи действия содержат изоляцию — `kill`,
+* **Fast scheduler** (always) — memory, CPU, I/O, limits, network, hardware,
+  kernel state. It is the **stall detector** (1 s sleeps whose lateness is
+  measured) and its heartbeat feeds the systemd watchdog; with
+  `stall.enabled = false` it wakes only every 5 s.
+* **Slow scheduler** — disk, process scan, integrity, systemd units, tuning;
+  **health scheduler** — HTTP/TCP/command probes (a hung endpoint cannot delay
+  disk checks). Schedulers sleep until the next detector is due — no fixed
+  polling — and are woken immediately by a reload.
+* **Event-driven sensors**, one supervised thread each: the PSI trigger,
+  `/dev/kmsg`, the netlink proc connector, the auth tailer, the fanotify
+  watchers (web FIM; SUID/SGID on filesystem marks), the systemd D-Bus
+  subscription, the access-log and ModSecurity tailers, and the FIM worker. Blocking
+  reads use `poll()` with a timeout, so a reload or shutdown is noticed within
+  2 s even on a silent host; a reload restarts a sensor at once (it is not
+  counted as a failure).
+* **Engine, control socket and metrics endpoint** share the main thread
+  (tokio current-thread runtime); a small blocking pool serves slow control
+  requests. The event journal has a writer thread of its own (bounded queue):
+  a write to a full or hung disk never holds the engine, `status` or
+  `/health`. Control-plane state (quarantine, tuning, circuit breakers) lives
+  in `Handles`, separate from the executor, so `status`, `quarantine_*`,
+  `tuning`, `/health` and shutdown never wait for a running action or hook.
+  Accept loops retry on errors, pause on descriptor exhaustion and cap
+  concurrent clients.
+* **Responder**, two supervised lanes, and the **notifier**, each a thread
+  with a bounded queue. Events whose actions contain containment — `kill`,
   `stop`, `freeze_cgroup`, `kill_cgroup`, `block_ip`, `quarantine`,
-  `throttle` — идут в *срочную* полосу; всё остальное (`restart_unit`,
-  `apt_clean`, vacuum журнала, очистка файлов, `exec`-хуки, `limit_unit`,
-  `sysctl`, одиночный снимок) — в *медленную*, так что kill во время 5-минутного
-  `apt-get clean` его не ждёт. Внутри полосы действия идут
-  последовательно; каждый kill в срочной полосе, так что два kill никогда не гоняются.
-  Полосы делят один набор предохранителей (часовые бюджеты,
-  cooldown'ы, интервал снимков: слот резервируется под короткой блокировкой
-  и возвращается, если действие не было попытано). Уведомления никогда не
-  блокируют детекцию. Паника перезапускает поток; при остановке демон ждёт
-  обе полосы, чтобы завершить текущее действие.
+  `throttle` — go to the *urgent* lane; everything else (`restart_unit`,
+  `apt_clean`, journal vacuum, file cleanup, `exec` hooks, `limit_unit`,
+  `sysctl`, a lone snapshot) to the *slow* lane, so a kill during a 5-minute
+  `apt-get clean` does not wait for it. Within a lane actions run
+  sequentially; every kill is in the urgent lane, so two kills never race.
+  The lanes share one set of circuit breakers (the hourly budgets,
+  cooldowns, the snapshot interval: a slot is reserved under a short lock
+  and given back if the action was not attempted). Notifications never
+  block detection. A panic restarts the thread; on shutdown the daemon waits
+  for both lanes to finish their current action.
 
-Демон измеряет себя: каждый тик детектора обёрнут в
-`getrusage(RUSAGE_THREAD)` + `/proc/thread-self/io`, а tracking allocator
-относит каждую аллокацию кучи на модуль, который её сделал (`wardenctl profile`,
-метрики `warden_module_*`, [performance.md](performance.md)).
+The daemon measures itself: every detector tick is wrapped in
+`getrusage(RUSAGE_THREAD)` + `/proc/thread-self/io`, and a tracking allocator
+charges each heap allocation to the module that made it (`wardenctl profile`,
+`warden_module_*` metrics, [performance.md](performance.md)).
 
-Фоновые сканы (обход диска, обход SUID/SGID, плановые сканы FIM)
-идут с nice 19 в idle-классе I/O и **пейсятся по давлению I/O**
-(`warden_sys::pace`): они паузятся между 200-мс квантами, когда другие
-задачи ждут I/O, переходят между idle- и best-effort-7-классами, а
-плановый повторный скан, обнаруживший занятый диск, откладывается (с ограничением). Детали и
-замеры: [performance.md](performance.md#background-scans-and-io-pressure).
+Background scans (the disk-usage walk, the SUID/SGID walk, scheduled FIM
+scans) run at nice 19 in the idle I/O class and are **paced by I/O
+pressure** (`warden_sys::pace`): they pause between 200 ms quanta when other
+tasks wait for I/O, move between the idle and best-effort-7 classes, and a
+scheduled rescan that finds the disk busy is postponed (bounded). Details and
+measurements: [performance.md](performance.md#background-scans-and-io-pressure).
 
-Двое часов. `Instant` (`CLOCK_MONOTONIC`) стоит, пока машина
-в suspend; он измеряет то, что должно быть непрерывным — sustain и гистерезис,
-таймауты, скорости. То, что оператор настраивает и читает в реальном времени — окна
-дедупликации, cooldown'ы, часовые бюджеты, back-off'ы, расписания сканов, затухание
-подозрительности, возрасты в событиях — идёт на `warden_sys::clock::now()`, монотонных
-часах плюс время сна с момента старта (`CLOCK_BOOTTIME`). Instant'ы из
-этих двух никогда не сравниваются друг с другом; `Cx` несёт оба (`now`, `real`).
+Two clocks. `Instant` (`CLOCK_MONOTONIC`) stops while the machine is
+suspended; it measures what must be continuous — sustain and hysteresis,
+timeouts, rates. What an operator configures and reads in real time — dedup
+windows, cooldowns, per-hour budgets, back-offs, scan schedules, suspicion
+decay, ages in events — runs on `warden_sys::clock::now()`, the monotonic
+clock plus the time slept since start (`CLOCK_BOOTTIME`). Instants from the
+two are never compared with each other; `Cx` carries both (`now`, `real`).
 
-Каждая программа, которую запускает Warden (`systemctl`, `nft`, `journalctl`, `exec`-хуки,
-команды уведомлений, командные проверки здоровья), идёт через один runner,
-`warden_sys::cmd::Run`: жёсткий таймаут, ограниченный вывод, `poll(2)` на пайпах
-и pidfd вместо sleep-опроса.
+Every program Warden starts (`systemctl`, `nft`, `journalctl`, `exec` hooks,
+notification commands, health-check commands) goes through one runner,
+`warden_sys::cmd::Run`: hard timeout, bounded output, `poll(2)` on the pipes
+and a pidfd instead of sleep-polling.
 
-Каждый тик детектора выполняется внутри `catch_unwind`: запаниковавший детектор
-отключается с экспоненциальным backoff'ом вместо того, чтобы уронить демон. Сенсоры
-перезапускаются с backoff'ом их супервизором. Отравленный мьютекс восстанавливается,
-а не распространяется.
+Every detector tick runs inside `catch_unwind`: a panicking detector is
+disabled with exponential backoff instead of taking the daemon down. Sensors
+are restarted with backoff by their supervisor. A poisoned mutex is recovered
+rather than propagated.
 
-## Жизненный цикл события
+## Event lifecycle
 
-1. Детектор/сенсор строит `Event` (kind, важность, субъект, детали,
-   предложенные действия, `fingerprint` для дедупликации). Очередь к
-   движку (8192 события) никогда не блокирует детектор; когда она полна, она
-   отдаёт самое старое событие *наинизшего* приоритета ниже приоритета новичка
-   (важность, на уровень выше для `security.*`; закрытия и результаты `action.*`
-   ранжируются высоко), так что поток шума не может вытолкнуть находку безопасности или
-   критическое событие. События всё равно уходят в порядке прихода. Дропы
-   считаются в `warden_events_dropped_total{priority}`.
-2. Движок применяет правила **политик** (suppress / alert-only / переоценка /
-   добавление-или-замена действий).
-3. События без действий **дедуплицируются** в пределах окна (эскалации по
-   важности всегда проходят).
-4. Событие **логируется** (tracing) и **пишется в журнал** (JSON lines, с ротацией).
-5. **Эвристики** накапливают подозрительность по процессу и по IP с
-   экспоненциальным затуханием; переход через порог испускает новое событие `heuristics.*`
-   (которое входит в конвейер заново и само может нести действия).
-6. Событие **уведомляется** (webhook / Telegram / команда), с учётом собственных
-   дедупликации и rate limit.
-7. Если оно несёт действия и не является «resolved»-событием, оно идёт в
-   **responder**; результат каждого действия возвращается как событие `action.*`.
+1. A detector/sensor builds an `Event` (kind, severity, subject, details,
+   proposed actions, a `fingerprint` for deduplication). The queue to the
+   engine (8192 events) never blocks a detector; when it is full, it gives
+   up the oldest event of the *lowest* priority below the newcomer's
+   (severity, one level up for `security.*`; resolutions and `action.*`
+   results rank high), so a flood of noise cannot push a security finding or
+   a critical event out. Events still leave in arrival order. Drops are
+   counted in `warden_events_dropped_total{priority}`.
+2. The engine applies **policy** rules (suppress / alert-only / re-rate /
+   add-or-replace actions).
+3. Action-less events are **deduplicated** within a window (escalations in
+   severity always pass).
+4. The event is **logged** (tracing) and **journaled** (JSON lines, rotated).
+5. **Heuristics** accumulate per-process and per-IP suspicion with
+   exponential decay; crossing a threshold emits a new `heuristics.*` event
+   (which re-enters the pipeline and can itself carry actions).
+6. The event is **notified** (webhook / Telegram / command), subject to its
+   own dedup and rate limit.
+7. If it carries actions and is not a "resolved" event, it goes to the
+   **responder**; each action's outcome returns as an `action.*` event.
 
-## Модель безопасности
+## Safety model
 
-Разрушительные действия проходят, по порядку:
+Destructive actions pass through, in order:
 
-* **dry-run** — ничего разрушительного не выполняется (снимки всё же делаются); каждое
-  действие логируется так, как оно *было бы* выполнено. Это **значение по умолчанию**
-  (`dry_run = true`): реагирование — осознанное решение.
-* **защитные списки** — PID 1, потоки ядра, сам Warden и настроенные
-  `comm`/`exe`/`units`/`uids` (sshd, systemd, journald, dbus,
-  getty, собственный сервис демона…) никогда не сигналятся, не останавливаются и не замораживаются.
-  Совпадение по `comm` считается только для процесса, проверенного как именно эта программа
-  (см. [security.md](security.md#what-warden-trusts)).
-* **закрепление идентичности** — процесс сигналится через `pidfd` только после
-  повторной проверки его времени старта, так что переиспользованный PID никогда не задевается.
-* **предохранители** — глобальные бюджеты (`max_kills_per_hour`,
-  `max_actions_per_hour`), cooldown'ы на цель (по ключу полного действия
-  и его цели, так что шаги плейбука не делят один), бюджеты рестартов на юнит
-  (`systemd.max_restarts_per_hour`, единственный такой). Бюджет
-  запрашивается перед действием и списывается только когда действие реально было
-  попытано: отказ (защищённая цель), пропуск (процесса уже нет) или dry-run
-  не стоят ничего.
-* **путевые защиты** — очистка никогда не касается `/etc`, `/usr`, `/var/lib`, `…/.ssh`
-  и т. п.; карантин действует только под настроенным корнем сайта или временным каталогом.
-  Очистка, карантин и обходы диска работают на **дескрипторах каталогов**
-  (`warden_sys::safefs`): каталоги открываются с `O_NOFOLLOW`, записи
-  проверяются через `fstatat`, а действия делаются через `unlinkat`/`openat`/
-  `renameat2(RENAME_NOREPLACE)` относительно дескриптора, после проверки, что имя
-  всё ещё ссылается на тот inode, который проверяли. Политика решается
-  по пути, который реально имеет дескриптор, так что пользователь, подменивший
-  каталог под `/tmp` или сайт на симлинк посреди действия, может заставить
-  действие упасть, но никогда — перенаправить его. На пути к настроенному корню
-  следуется только симлинк, принадлежащий root или владельцу его каталога (правило
-  `fs.protected_symlinks`).
-* **эффективность** — kill по памяти, не поднявший MemAvailable хотя бы на
-  половину того, что держала жертва, останавливает kill'ы до конца эпизода
-  (`memory.kill_ineffective`), а kill'ы за эпизод ограничены
-  (`memory.max_kills_per_episode`); доказательства, чьи действия были намеренно отозваны
-  (`act_on_existing = false`, политика `alert_only`), никогда не заставляют
-  эвристики изолировать процесс; массовое изменение FIM убивает только писателей, чьи
-  собственные записи совпали с сигнатурами.
+* **dry-run** — nothing destructive executes (snapshots still do); every
+  action is logged as it *would* have run. It is the **default**
+  (`dry_run = true`): remediation is an explicit decision.
+* **protection lists** — PID 1, kernel threads, Warden itself, and the
+  configured `comm`/`exe`/`units`/`uids` (sshd, systemd, journald, dbus,
+  getty, the daemon's own service…) are never signalled, stopped or frozen.
+  A `comm` match counts only for a process verified to be that program
+  (see [security.md](security.md#what-warden-trusts)).
+* **identity pinning** — a process is signalled through a `pidfd` only after
+  its start-time is re-verified, so a recycled PID is never hit.
+* **circuit breakers** — global budgets (`max_kills_per_hour`,
+  `max_actions_per_hour`), per-target cooldowns (keyed by the complete action
+  and its target, so the steps of a playbook do not share one), per-unit
+  restart budgets (`systemd.max_restarts_per_hour`, the only one). A budget
+  is consulted before an action and charged only once the action was really
+  attempted: a refusal (protected target), a skip (the process is already
+  gone) or a dry run costs nothing.
+* **path guards** — cleanup never touches `/etc`, `/usr`, `/var/lib`, `…/.ssh`
+  etc.; quarantine only acts under a configured site root or a temp dir.
+  Cleanup, quarantine and the disk walks work on **directory descriptors**
+  (`warden_sys::safefs`): directories are opened with `O_NOFOLLOW`, entries
+  are examined with `fstatat` and acted on with `unlinkat`/`openat`/
+  `renameat2(RENAME_NOREPLACE)` relative to the descriptor, after checking
+  that the name still refers to the inode that was examined. The policy is
+  decided on the path the descriptor really has, so a user who swaps a
+  directory under `/tmp` or a site for a symlink mid-action can make the
+  action fail, never redirect it. On the way to a configured root only a
+  symlink owned by root or by the owner of its directory is followed (the
+  `fs.protected_symlinks` rule).
+* **effectiveness** — a memory kill that does not raise MemAvailable by at
+  least half of what its victim held stops kills for the rest of the episode
+  (`memory.kill_ineffective`), and kills per episode are capped
+  (`memory.max_kills_per_episode`); evidence whose actions were withheld on
+  purpose (`act_on_existing = false`, a policy `alert_only`) never makes the
+  heuristics contain a process; a FIM mass change kills only writers whose
+  own writes matched the signatures.
 
-Reload'ы (`SIGHUP`) **сохраняют** предохранители, так что reload нельзя
-использовать для обхода бюджета, и runtime-override dry-run (если только
-собственный `dry_run` конфигурации не изменился); каждое изменение действующего режима —
-это событие `warden.dry_run`. Детекторы не пересоздаются: каждый объявляет
-секции конфига, из которых он строится (`Detector::sections`); детектор,
-чей набор секций не изменился, остаётся как есть, а у которого изменился —
-принимает их (`Detector::reconfigure`) и сохраняет свои уровни, открытые
-условия, baseline'ы и расписания. Только тот детектор, который не может, —
-заменяется, а выключенный — удаляется, после закрытия того, что у него было открыто
-(`closed_by: reload`), так что ни один инцидент не остаётся открытым навсегда. Reload,
-изменяющий настройку, читаемую один раз при старте (`daemon.state_dir`, `mlock`,
-`metrics.listen`, …), сообщает об этом в `warden.reloaded` (`restart_required`).
+Reloads (`SIGHUP`) **preserve** the circuit breakers, so a reload cannot be
+used to bypass a budget, and the runtime dry-run override (unless the
+configuration's own `dry_run` changed); every change of the effective mode is
+a `warden.dry_run` event. Detectors are not rebuilt: each declares the
+configuration sections it is built from (`Detector::sections`); a detector
+whose sections did not change is kept as it is, one whose sections changed
+adopts them (`Detector::reconfigure`) and keeps its levels, open
+conditions, baselines and schedules. Only a detector that cannot is
+replaced, and a disabled one removed — after resolving what it had open
+(`closed_by: reload`), so no incident is left open for ever. A reload that
+changes a setting read once at startup (`daemon.state_dir`, `mlock`,
+`metrics.listen`, …) says so in `warden.reloaded` (`restart_required`).
 
-Каждое условие, о котором сообщает детектор, имеет одинаковый жизненный цикл
-(`warden_core::condition`, или `LevelTracker` для порогов): оно
-сообщается, когда начинается (со своими действиями), напоминается с экспоненциальным
-back-off'ом, пока держится, и закрывается, когда останавливается. Его fingerprint —
-`kind[:detail]:<severity>`, его закрытие — `kind[:detail]:resolved` — соглашение,
-проверяемое тестом по исходникам.
+Every condition a detector reports has the same lifecycle
+(`warden_core::condition`, or a `LevelTracker` for thresholds): it is
+reported when it starts (with its actions), reminded with an exponential
+back-off while it holds, and resolved when it stops. Its fingerprint is
+`kind[:detail]:<severity>`, its resolution `kind[:detail]:resolved` — a
+convention checked by a test on the sources.
 
-## Состояние на диске
+## State on disk
 
 ```
-/etc/warden/warden.toml            основной конфиг
-/etc/warden/conf.d/*.toml          drop-in'ы (сливаются; списки записей добавляются, плейбуки заменяются)
-/etc/warden/signatures.d/*.toml    дополнительные правила сигнатур FIM
+/etc/warden/warden.toml            main configuration
+/etc/warden/conf.d/*.toml          drop-ins (merged; record lists appended, playbooks replaced)
+/etc/warden/signatures.d/*.toml    extra FIM signature rules
 /var/lib/warden/
-  integrity.json                   baseline системных файлов
-  lineage.json                     выученные цепочки родитель→потомок
-  disk-cleanups.json               сколько освободил каждый плейбук очистки (переживает рестарты)
-  dry-run.json                     override `wardenctl dry-run on|off` (переживает reload'ы и рестарты)
-  sysctl-changes.json              журнал тюнинга sysctl (для отката)
-  fim/<site>.json                  baseline FIM на сайт (хеши + помеченные)
-  quarantine/<id>/{blob,meta.json} файлы в карантине (mode 000) + метаданные
-  snapshots/<ts>_<reason>/         диагностические снимки
-/var/log/warden/events.jsonl[.N]   журнал событий (формат: [events.md](events.md))
-/run/warden/control.sock           управляющий сокет (только root)
+  integrity.json                   system-file baseline
+  lineage.json                     learned parent→child process lineages
+  disk-cleanups.json               what each cleanup playbook freed (survives restarts)
+  dry-run.json                     the `wardenctl dry-run on|off` override (survives reloads and restarts)
+  sysctl-changes.json              journal of tuned sysctls (for rollback)
+  fim/<site>.json                  per-site FIM baseline (hashes + flagged)
+  quarantine/<id>/{blob,meta.json} quarantined files (mode 000) + metadata
+  snapshots/<ts>_<reason>/         diagnostic snapshots
+/var/log/warden/events.jsonl[.N]   the event journal (format: [events.md](events.md))
+/run/warden/control.sock           control socket (root only)
 ```
 
-## Почему именно эти интерфейсы ядра
+## Why these kernel interfaces
 
-* **PSI** (`/proc/pressure/*`, триггеры) сообщает *потерянное время* из-за конкуренции
-  за ресурс — он растёт задолго до того, как `MemAvailable` дойдёт до нуля, и именно это
-  делает «сервер завис на 10 минут» обнаружимым и даже предотвратимым.
-* **pidfd** делает kill/stop свободными от гонок с переиспользованием PID.
-* **netlink proc connector** даёт exec/uid/ptrace-события в реальном времени без
-  тулчейна eBPF, BTF или заголовков ядра — работает на стоковых ядрах дистрибутивов
-  вплоть до 2.6.15.
-* **fanotify** (метка точки монтирования, `FAN_CLASS_NOTIF`) сообщает **PID писателя**
-  изменённого файла — именно это позволяет Warden называть PHP/Node-воркера, заражающего
-  сайт, а не просто замечать изменение. В режиме file handle на
-  метках файловой системы (`FAN_REPORT_DFID_NAME`) он сообщает `chmod u+s` где угодно
-  на файловой системе, что заменяет большую часть обхода SUID — самой тяжёлой
-  операции для кеша inode.
-* **D-Bus** (~850-строчный встроенный клиент: SASL `EXTERNAL`, маршалинг, без
-  libdbus) доставляет изменения состояния юнитов systemd по мере их появления вместо
-  процесса `systemctl` каждые 30 с.
-* **cgroup v2** (`cgroup.freeze`, `cgroup.kill`) изолирует или удаляет целый
-  убежавший сервис атомарно.
-* **md5sums dpkg** превращают «системный бинарник изменился» в «системный бинарник
-  изменился и больше не совпадает со своим пакетом» — отличая обновление от
-  вмешательства.
+* **PSI** (`/proc/pressure/*`, triggers) reports *lost time* due to resource
+  contention — it rises long before `MemAvailable` hits zero, which is what
+  makes "the server froze for 10 minutes" detectable and even preventable.
+* **pidfd** makes kill/stop race-free against PID reuse.
+* **netlink proc connector** gives real-time exec/uid/ptrace events with no
+  eBPF toolchain, BTF or kernel headers — it works on stock distro kernels
+  back to 2.6.15.
+* **fanotify** (mount mark, `FAN_CLASS_NOTIF`) reports the **writer PID** of a
+  changed file, which is what lets Warden name the PHP/Node worker infecting a
+  site rather than just noticing the change. In file-handle mode on
+  filesystem marks (`FAN_REPORT_DFID_NAME`) it reports `chmod u+s` anywhere
+  on a filesystem, which replaces most of the SUID walk — the heaviest
+  operation for the inode cache.
+* **D-Bus** (a ~850-line built-in client: SASL `EXTERNAL`, marshalling, no
+  libdbus) delivers systemd unit state changes as they happen instead of a
+  `systemctl` process every 30 s.
+* **cgroup v2** (`cgroup.freeze`, `cgroup.kill`) contains or removes a whole
+  runaway service atomically.
+* **dpkg md5sums** turn "a system binary changed" into "a system binary
+  changed and no longer matches its package" — distinguishing an upgrade from
+  tampering.

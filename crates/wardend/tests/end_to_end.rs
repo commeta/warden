@@ -210,6 +210,15 @@ root = "{d}/www"
     assert!(wait_for(Duration::from_secs(15), || UnixStream::connect(&daemon.socket).is_ok()), "daemon never came up");
     let pong = request(&daemon.socket, r#"{"cmd":"ping"}"#);
     assert_eq!(pong["data"], "pong");
+    // the log tails read what is written once they run (they start at the
+    // end of the file): wait for them
+    assert!(
+        wait_for(Duration::from_secs(15), || {
+            let st = request(&daemon.socket, r#"{"cmd":"status"}"#);
+            ["auth", "waf"].iter().all(|s| st["data"]["sensors"][*s]["state"] == "running")
+        }),
+        "log sensors never started"
+    );
 
     // (1) disk cleanup deletes the old gzip logs
     assert!(

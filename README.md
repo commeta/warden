@@ -2,49 +2,126 @@
 
 # 🛡️ Warden
 
-[![build](https://github.com/commeta/warden/actions/workflows/ci.yml/badge.svg)](https://github.com/commeta/warden/actions/workflows/ci.yml)
+**A host guardian daemon for Linux servers and workstations — written entirely in Rust.**
 
-**Демон-страж для Linux-серверов и рабочих станций — полностью на Rust.**
+Warden watches the health of a machine and *acts* when it goes wrong: it catches
+memory pressure and swap storms **before** the OOM killer, before the server
+"hangs for ten minutes"; it keeps disks from filling up; and it detects and
+contains intrusions — webshells, reverse shells, miners, privilege escalation,
+persistence — with guarded, configurable automatic remediation.
 
-Warden следит за здоровьем машины и *действует*, когда что-то идёт не так: он ловит давление на память и своп-штормы **до** OOM-killer'а, до того как сервер «зависнет на десять минут»; не даёт дискам заполниться; обнаруживает и изолирует вторжения — веб-шеллы, reverse shell, майнеры, повышение привилегий, закрепление в системе — с защищённым, настраиваемым автоматическим реагированием.
+[Architecture](docs/architecture.md) · [Detectors & events](docs/detectors.md) · [Security notes](docs/security.md) · [Reference config](config/warden.toml)
 
-[Архитектура](docs/architecture.md) · [Детекторы и события](docs/detectors.md) · [Заметки о безопасности](docs/security.md) · [Эталонный конфиг](config/warden.toml) · [Warden Lab Kit](scripts/warden-lab-kit)
+![status](https://img.shields.io/badge/status-beta-orange) ![rust](https://img.shields.io/badge/rust-1.88%2B-informational) ![platform](https://img.shields.io/badge/platform-Linux%204.20%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 </div>
 
 ---
 
-## Зачем нужен Warden
+## Why Warden
 
-`free -h` врёт вам. К тому моменту, как он покажет мало памяти, ядро уже секундами тормозит ваши процессы, освобождая и снова отдавая страницы, а до машины не достучаться по SSH. Классический мониторинг говорит вам *после* инцидента. Warden использует **Pressure Stall Information (PSI)** ядра — фактическое время, которое ваши задачи теряют в ожидании памяти, CPU и I/O — чтобы увидеть формирующуюся проблему и либо оповестить вас, либо убить нужный процесс *до* того, как машина зависнет.
+`free -h` lies to you. By the time it shows low memory, the kernel has already
+been stalling your processes for seconds, reclaiming and re-faulting pages,
+and the box is unreachable over SSH. Classic monitoring tells you *after* the
+incident. Warden uses the kernel's **Pressure Stall Information (PSI)** — the
+actual time your tasks lose waiting for memory, CPU and I/O — to see the
+problem forming and either page you or kill the right process *before* the
+machine locks up.
 
-Тот же демон следит за обыденными катастрофами, которые валят серверы в 3 часа ночи (журнал, заполняющий корневую файловую систему; файловая система, ушедшая в read-only; переполненная таблица conntrack; упавший юнит), и за умышленными (PHP-воркер, запускающий `curl … | sh`; веб-шелл, появившийся в `wp-content/uploads`; процесс, ставший root в обход `sudo`; новый SUID-бинарник в `/tmp`). Первое он умеет исправлять автоматически, второе — изолировать, и всё это под строгими правилами безопасности, так что он никогда не убьёт вашу базу данных или вашу SSH-сессию.
+The same daemon watches for the mundane disasters that take servers down at
+3 a.m. (a journal filling the root filesystem, a filesystem going read-only,
+conntrack table full, a failed unit) and the deliberate ones (a PHP worker
+spawning `curl … | sh`, a webshell appearing in `wp-content/uploads`, a
+process that became root without going through `sudo`, a new SUID binary in
+`/tmp`). It can fix the first kind automatically and contain the second — all
+under strict safety rules so it never kills your database or your SSH session.
 
-Один самодостаточный бинарник (динамически слинкован только с glibc ≥ 2.34 и libgcc). Никакого агента в ядре, никакого тулчейна eBPF, никакого рантайма Python. Пакет `.deb` устанавливается и работает на Debian 12, Ubuntu 22.04 и 24.04 (проверяется в CI); любой Linux с glibc 2.34+ запускает его из архива (возможности ядра: см. [Совместимость](#совместимость)).
-Достаточно мал для VPS на 1 ГиБ: ~10 МиБ RSS с типичным набором детекторов, ~33 МиБ со всеми модулями и сайтом на 20 000 файлов под FIM; у выключенного модуля нет ни потока, ни памяти ([замеры](docs/performance.md)).
+One self-contained binary (dynamically linked only against glibc ≥ 2.34 and
+libgcc). No agent in the kernel, no eBPF toolchain, no Python runtime. The
+`.deb` installs and runs on Debian 12, Ubuntu 22.04 and 24.04 (checked in CI);
+any Linux with glibc 2.34+ runs it from the tarball (kernel features: see
+[Compatibility](#compatibility)).
+Small enough for a 1 GiB VPS: ~10 MiB RSS with a typical set of detectors,
+~33 MiB with every module on and a 20 000-file site under FIM; a module you
+disable has no thread and no memory at all ([measurements](docs/performance.md)).
 
-## Ключевые возможности
+## Highlights
 
-- **Давление на память и своп-штормы (PSI).** Обнаруживает устойчивые простои и трэшинг с настраиваемым временем обнаружения, регистрирует триггер PSI в ядре для мгновенного пробуждения, ранжирует настоящего виновника (что освободит kill — анонимная память + своп — плюс OOM-«плохость» и активность подкачки) и может убить его до того, как OOM-killer ядра выберет не ту жертву; kill, не освободивший память, останавливает дальнейшие kill'ы до конца эпизода. Warden делает `mlock` себе, чтобы оставаться отзывчивым, пока хост трэшит.
-- **Обнаружение зависания всего хоста.** Измеряет, насколько поздно просыпается его собственный высокоприоритетный планировщик, залоченный в памяти, — прямой сигнал, что машина была неотзывчива, с диагностическим снимком, снятым во время зависания.
-- **Самовосстановление диска.** Место, inode'ы, ремонтирование в read-only и *прогноз* скорости заполнения. Упорядоченный плейбук очистки (vacuum journald, `apt clean`, удаление старых логов, усечение огромных логов, освобождение удалённых-но-открытых файлов) выполняется только на затронутой файловой системе и никогда не трогает системные каталоги. Когда очистка не помогает, ограниченный фоновый `du` сообщает, **кто занимает диск** (самые большие каталоги и файлы) — `wardenctl du` делает то же по запросу.
-- **Обнаружение вторжений по событиям процессов в реальном времени.** Через netlink **proc connector** (без eBPF): повышение привилегий, fileless-запуск, reverse shell, криптомайнеры, маскировка процессов, инъекция через LD_PRELOAD, инъекция через ptrace и веб-воркеры, порождающие shell/загрузчики. Повторяющиеся безобидные exec'и (сборочные серверы, штормы cron) идут быстрым путём, который читает один файл `/proc` вместо шести.
-- **Мониторинг целостности веб-файлов.** BLAKE3-базлайны каждого скрипта на ваших сайтах, проверяемые по расписанию *и* в реальном времени через **fanotify** (который сообщает **PID писателя** — тот самый воркер, заразивший файл). Движок сигнатур помечает веб-шеллы/дропперы в PHP, Node, Python, JSP/ASP и трюки с `.htaccess`; корреляция с access-log называет запрос, который посадил файл, и блокирует IP, использующие шелл.
-- **Целостность системы и auth.** Базлайны `/etc/passwd`, sudoers, SSH-ключей, cron, юнитов systemd, `ld.so.preload`, PAM… (с проверкой по контрольным суммам dpkg, чтобы обновления пакетов не давали ложных срабатываний), видит новый SUID/SGID-файл **в момент его появления** (метки файловой системы fanotify; еженедельный обход остаётся страховкой), следит за слушающими сокетами и разбирает journald/auth.log на предмет SSH-брутфорса (с автоматической блокировкой), root-логинов и изменений учётных записей.
-- **Интеграция с ModSecurity (v2 и v3).** Читает аудит-лог (нативный или JSON) или error.log Apache/nginx, блокирует клиентов, которых ModSecurity постоянно останавливает (она судит запросы, Warden запоминает атакующих), и ставит первыми IP, помеченные WAF, при поиске запроса, посадившего веб-шелл.
-- **Работает с любым веб-стеком.** nginx, Apache, LiteSpeed; PHP через FPM, mod_php, CGI/FastCGI/mod_fcgid, suEXEC/mpm-itk с пользователями на сайт; Node, Python, Ruby, Java-серверы приложений — см. [docs/integrations.md](docs/integrations.md).
-- **Упавшие юниты systemd в реальном времени.** Изменения состояния юнитов приходят по D-Bus (без процесса `systemctl` каждые 30 с); опциональный авто-рестарт с часовым лимитом.
-- **Зависшие сервисы, микросервисы, базы данных.** Проверки здоровья HTTP/TCP/командой перезапускают сервисы, которые живы, но не отвечают (`pg_isready`, `redis-cli ping`, `/health`); правила `[[process.limit]]` троттлят или убивают зависшие скрипты (CPU в течение N минут, время жизни, RSS); обнаруживается СУБД, порождающая shell (SQLi → RCE); события называют контейнер Docker/Podman/Kubernetes и сервис, чей собственный лимит памяти был исчерпан.
-- **Адаптируется к машине.** Пороги памяти масштабируются под объём RAM и следуют лимиту cgroup внутри контейнеров. Советник по тюнингу объясняет, какие sysctl не подходят вашему железу и нагрузке; ёмкостные лимиты (conntrack, pid_max, file-max) могут расти автоматически в пределах вычисленных из RAM границ — поведенческие настройки никогда не меняются за вашей спиной.
-- **Эвристический скоринг.** Отдельные находки накапливают подозрительность по процессу и по IP с экспоненциальным затуханием; переход через порог изолирует процесс или блокирует адрес. Он также учит нормальную цепочку родитель→потомок для каждого сервиса и помечает никогда не виденные.
-- **Защищённое авто-реагирование.** kill (без гонок через pidfd), SIGSTOP для форензики, throttle (nice + idle I/O), заморозка/kill cgroup, перезапуск юнита, лимиты юнита на лету, карантин файла (даже сделанного `chattr +i`), блокировка IP (nftables с таймаутами ядра), ограниченный рост sysctl, диагностические снимки, очистка или ваш собственный хук. Защитные списки процессов, предохранители, cooldown'ы на цель, path-guard'ы и глобальный **dry-run** держат это безопасным.
-- **Управляемость.** Prometheus `/metrics` и `/health`, журнал событий в JSON-lines, уведомления Slack/Mattermost/Telegram/командой, богатый `wardenctl`, живая перезагрузка конфига и офлайн-`wardenctl doctor`.
+- **Memory pressure & swap storms (PSI).** Detects sustained stalls and
+  thrashing with a configurable detection time, registers a kernel PSI trigger
+  for instant wake-up, ranks the real culprit (what a kill would free —
+  anonymous memory + swap — plus OOM badness and paging activity) and can
+  kill it before the kernel OOM killer picks the wrong victim; a kill that
+  does not free memory stops further kills for the episode. Warden `mlock`s itself so it stays responsive while the host
+  thrashes.
+- **Whole-host freeze detection.** Measures how late its own high-priority,
+  memory-locked scheduler wakes up — a direct signal that the machine was
+  unresponsive, with a diagnostic snapshot captured during the freeze.
+- **Disk self-healing.** Space, inodes, read-only remounts, and a fill-rate
+  *prediction*. An ordered cleanup playbook (vacuum journald, `apt clean`,
+  delete old logs, truncate huge logs, release deleted-but-open files) runs
+  only on the affected filesystem and never touches system directories. When
+  cleanup cannot help, a bounded background `du` reports **who is using the
+  disk** (biggest directories and files) — `wardenctl du` does the same on
+  demand.
+- **Intrusion detection with real-time process events.** Via the netlink
+  **proc connector** (no eBPF): privilege escalation, fileless execution,
+  reverse shells, crypto-miners, process masquerading, LD_PRELOAD injection,
+  ptrace injection, and web workers spawning shells/downloaders. Repeated
+  benign execs (build servers, cron storms) take a fast path that reads one
+  `/proc` file instead of six.
+- **Web file-integrity monitoring.** BLAKE3 baselines of every script on your
+  sites, verified on a schedule *and* in real time via **fanotify** (which
+  reports the **writer PID** — the exact worker that infected the file). A
+  signature engine flags webshells/droppers in PHP, Node, Python, JSP/ASP and
+  `.htaccess` tricks; access-log correlation names the request that planted
+  the file and blocks the IPs using the shell.
+- **System integrity & auth.** Baselines `/etc/passwd`, sudoers, SSH keys,
+  cron, systemd units, `ld.so.preload`, PAM… (with dpkg-checksum verification
+  so package upgrades aren't false positives), sees a new SUID/SGID file **the
+  moment it appears** (fanotify filesystem marks; a weekly walk remains as a
+  safety net), watches listening sockets, and parses journald/auth.log for SSH brute force (with
+  automatic blocking), root logins and account changes.
+- **ModSecurity integration (v2 and v3).** Reads the audit log (native or
+  JSON) or the Apache/nginx error log, blocks clients that ModSecurity keeps
+  stopping (it judges requests, Warden remembers attackers) and ranks
+  WAF-flagged IPs first when hunting the request that planted a webshell.
+- **Works with every web stack.** nginx, Apache, LiteSpeed; PHP via FPM,
+  mod_php, CGI/FastCGI/mod_fcgid, suEXEC/mpm-itk per-site users; Node, Python,
+  Ruby, Java app servers — see [docs/integrations.md](docs/integrations.md).
+- **Failed systemd units in real time.** Unit state changes arrive over
+  D-Bus (no `systemctl` process every 30 s); optional auto-restart with an
+  hourly budget.
+- **Hung services, microservices, databases.** HTTP/TCP/command health checks
+  restart services that are alive but not answering (`pg_isready`,
+  `redis-cli ping`, `/health`); `[[process.limit]]` rules throttle or kill
+  stuck scripts (CPU for N minutes, lifetime, RSS); a database spawning a shell
+  (SQLi → RCE) is detected; events name the Docker/Podman/Kubernetes container
+  and the service whose own memory limit was hit.
+- **Adapts to the machine.** Memory thresholds scale with RAM and follow the
+  cgroup limit inside containers. A tuning advisor explains which sysctls do
+  not fit your hardware and workload; capacity limits (conntrack, pid_max,
+  file-max) can grow automatically within RAM-derived caps — behaviour knobs
+  are never changed behind your back.
+- **Heuristic scoring.** Individual findings accumulate per-process and per-IP
+  suspicion with exponential decay; crossing a threshold contains the process
+  or blocks the address. It also learns each service's normal
+  parent→child lineage and flags never-seen ones.
+- **Guarded auto-remediation.** kill (race-free via pidfd), SIGSTOP for
+  forensics, throttle (nice + idle I/O), freeze/kill a cgroup, restart a unit,
+  runtime unit limits, quarantine a file (even one made `chattr +i`), block an
+  IP (nftables with kernel timeouts), bounded sysctl growth, diagnostic
+  snapshots, cleanup, or your own hook. Protected-process lists, circuit breakers, per-target
+  cooldowns, path guards and a global **dry-run** keep it safe.
+- **Operable.** Prometheus `/metrics` and `/health`, a JSON-lines event
+  journal, Slack/Mattermost/Telegram/command notifications, a rich
+  `wardenctl`, live config reload, and an offline `wardenctl doctor`.
 
-## Как это выглядит
+## How it looks
 
 ```console
 $ wardenctl status
-Warden 0.14.1 on web-01 — pid 914, up 6days 2h  
+Warden 0.14.2 on web-01 — pid 914, up 6days 2h  
 Levels:   memory ok   cpu ok   io ok   disk warning
 Sensors:  psi_trigger running · kmsg running · proc_connector running ·
           auth running · fim_realtime running · access_log running
@@ -69,73 +146,104 @@ memory PSI: some avg10=38.20 | full avg10=12.80  (full = all tasks stalled)
     1044   820.0MiB    12.0MiB   900.0MiB         12.0  mysqld
 ```
 
-## Установка
+## Install
 
-### Из исходников (любой дистрибутив)
+### From source (any distro)
 
 ```bash
-# 1. Rust для вашего обычного пользователя (не root): https://rustup.rs
+# 1. Rust for your normal user (not root): https://rustup.rs
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 
-# 2. Собирайте как обычный пользователь — никогда через sudo
+# 2. Build as your normal user — never with sudo
 git clone https://github.com/commeta/warden && cd warden
 cargo build --release
 
-# 3. Установите как root (профили: webserver | workstation | database)
+# 3. Install as root (profiles: webserver | workstation | database)
 sudo ./scripts/install.sh --profile webserver
-# отредактируйте /etc/warden/warden.toml и conf.d/ (как минимум: корни сайтов FIM, allowlist фаервола);
-# он стартует в режиме наблюдения (dry_run = true) — см. "Быстрый старт и безопасный раскат"
+# edit /etc/warden/warden.toml and conf.d/ (at minimum: FIM site roots, firewall allowlist);
+# it starts in observe-only mode (dry_run = true) — see "Quick start & safe rollout"
 sudo wardenctl doctor
 sudo systemctl enable --now wardend
 ```
 
-`install.sh`, запущенный через sudo, собирает от имени вызывающего пользователя *его* тулчейном, если бинарники отсутствуют или устарели, так что шаг 2 можно и пропустить. Повторный запуск обновляет бинарники и юнит, сохраняет вашу конфигурацию (новые эталонные файлы ложатся рядом как `*.new`) и перезапускает работающий сервис.
+`install.sh` run through sudo builds as the invoking user with *their*
+toolchain if the binaries are missing or stale, so you can also skip step 2.
+Re-running it upgrades binaries and the unit, keeps your configuration (new
+reference files go next to it as `*.new`) and restarts a running service.
 
-Для сборки требуется Rust ≥ 1.88 (edition 2024, `let` chains). Рекомендуемые инструменты рантайма: `nftables` (блокировка IP) и `systemd`/`journalctl` (события auth, vacuum журнала). Без них Warden деградирует изящно — `wardenctl doctor` скажет, чего стоит каждая недостающая часть.
+Requires Rust ≥ 1.88 to build (edition 2024 `let` chains). Recommended runtime tools: `nftables` (IP
+blocking) and `systemd`/`journalctl` (auth events, journal vacuum). Warden
+degrades gracefully without them — `wardenctl doctor` tells you what each
+missing piece costs.
 
-### Пакет Debian / Ubuntu
+### Debian / Ubuntu package
 
 ```bash
-./scripts/build-deb.sh            # как обычный пользователь → target/debian/warden_0.14.1-1_amd64.deb
+./scripts/build-deb.sh            # as your normal user → target/debian/warden_0.14.2-1_amd64.deb
 sudo apt install ./target/debian/warden_*.deb
-./scripts/build-deb.sh --portable # для других машин: слинкован в контейнере Ubuntu 22.04 (docker/podman),
-                                  # → target/portable/debian/…, ставится на Debian 12, Ubuntu 22.04 и новее
+./scripts/build-deb.sh --portable # for other machines: linked in an Ubuntu 22.04 container (docker/podman),
+                                  # → target/portable/debian/…, installs on Debian 12, Ubuntu 22.04 and newer
 ```
 
-Обычная сборка требует glibc той машины, на которой собиралась (2.39 на Ubuntu 24.04), и её пакет об этом говорит; собирайте с `--portable` для пакета, который нужно ставить в другом месте.
+A plain build needs the glibc of the machine it was built on (2.39 on
+Ubuntu 24.04), and its package says so; build with `--portable` for a
+package to install elsewhere.
 
-Пакет устанавливает оба бинарника, юнит systemd (не включён и не запущен), эталонный конфиг как conffile (`dry_run = true`) и примеры drop-in'ов/сигнатур под `/usr/share/warden/`. Включите его сами, когда конфигурация проверена: `sudo systemctl enable --now wardend`. Обновление перезапускает работающий сервис и не трогает остановленный.
+The package installs both binaries, the systemd unit (neither enabled nor
+started), the reference config as a conffile (`dry_run = true`), and example
+drop-ins/signatures under `/usr/share/warden/`. Enable it yourself once the
+configuration is reviewed: `sudo systemctl enable --now wardend`. An upgrade
+restarts a running service and leaves a stopped one alone.
 
-### Устранение неполадок установки
+### Troubleshooting the install
 
-| симптом | причина | решение |
+| symptom | cause | fix |
 |---|---|---|
-| `sudo ./scripts/install.sh` → `cargo not found` | sudo сбрасывает `PATH` (`secure_path`), rustup живёт в `~/.cargo/bin` | исправлено в 0.10: скрипт находит ваш тулчейн; или `cargo build --release`, затем `sudo ./scripts/install.sh --no-build` |
-| `rustup could not choose a version of cargo to run` | cargo запущен как root с вашим `PATH`, но у root нет rustup-дефолта | собирайте как ваш пользователь (выше); не запускайте cargo через sudo |
-| `cargo install cargo-deb` → `Permission denied (os error 13)` в `~/.cargo/registry` | более ранний `sudo -E … cargo` записал файлы, принадлежащие root, в ваш домашний каталог | `sudo chown -R "$USER": ~/.cargo ~/.rustup ./target` (install.sh 0.10 исправляет это автоматически) |
-| `wardend.service: Main process exited, code=dumped, status=31/SYS` | seccomp-фильтр юнита 0.9 убил демон (fanotify/adjtimex не разрешены) | установите 0.10 (`sudo ./scripts/install.sh`), затем `sudo systemctl reset-failed wardend && sudo systemctl restart wardend`; `wardenctl doctor` проверяет установленный юнит |
-| сенсор показывает `unavailable … (os error 1)` | не хватает capability или вызов блокирован изменённым юнитом | `wardenctl doctor` называет, чего именно |
+| `sudo ./scripts/install.sh` → `cargo not found` | sudo resets `PATH` (`secure_path`), rustup lives in `~/.cargo/bin` | fixed in 0.10: the script finds your toolchain; or `cargo build --release` first, then `sudo ./scripts/install.sh --no-build` |
+| `rustup could not choose a version of cargo to run` | cargo started as root with your `PATH`, but root has no rustup default | build as your user (above); don't run cargo through sudo |
+| `cargo install cargo-deb` → `Permission denied (os error 13)` in `~/.cargo/registry` | an earlier `sudo -E … cargo` wrote root-owned files into your home | `sudo chown -R "$USER": ~/.cargo ~/.rustup ./target` (install.sh 0.10 repairs this automatically) |
+| `wardend.service: Main process exited, code=dumped, status=31/SYS` | seccomp filter of the 0.9 unit killed the daemon (fanotify/adjtimex not allowed) | install 0.10 (`sudo ./scripts/install.sh`), then `sudo systemctl reset-failed wardend && sudo systemctl restart wardend`; `wardenctl doctor` checks the installed unit |
+| a sensor shows `unavailable … (os error 1)` | missing capability, or a call blocked by a customised unit | `wardenctl doctor` names which one |
 
-## Быстрый старт и безопасный раскат
+## Quick start & safe rollout
 
-Warden поставляется безопасным: разрушительные действия консервативны, и каждое из них закрыто шлюзом. Рекомендуемый путь:
+Warden ships safe: destructive actions are conservative and every one of them
+is gated. The recommended path:
 
-1. Начните в **dry-run**. Это поставляемый по умолчанию режим (`dry_run = true` в `warden.toml`; и `install.sh`, и `.deb` оставляют его включённым): Warden обнаруживает и сообщает всё, но ничего не меняет. Что он *сделал бы*, есть в журнале событий — см. [docs/events.md](docs/events.md) про каждое событие и значения полей.
-2. Понаблюдайте день: `wardenctl events -f`, `wardenctl scores`, `wardenctl top`.
-3. Заглушите ложные срабатывания правилами `[[policy]]` (скопируйте `subject`/`cmdline` события в правило `suppress` или `alert_only`).
-4. Включите реагирование: `wardenctl dry-run off` действует сразу и сохраняется между reload'ами и рестартами (хранится в каталоге состояния; `wardenctl status` показывает, что решило режим, `wardenctl dry-run reset` возвращает к конфигурации). Или задайте `dry_run = false` в `warden.toml` и `systemctl reload wardend` (или установите с `install.sh --enforce`); изменение `dry_run` в конфигурации побеждает более старый override.
+1. Start in **dry-run**. This is the shipped default (`dry_run = true` in
+   `warden.toml`; both `install.sh` and the `.deb` leave it on): Warden
+   detects and reports everything but changes nothing. What it *would* have
+   done is in the event journal — see [docs/events.md](docs/events.md) for
+   every event and what the fields mean.
+2. Watch for a day: `wardenctl events -f`, `wardenctl scores`,
+   `wardenctl top`.
+3. Silence any false positives with `[[policy]]` rules (copy the event's
+   `subject`/`cmdline` into a `suppress` or `alert_only` rule).
+4. Turn remediation on: `wardenctl dry-run off` takes effect at once and is
+   kept across reloads and restarts (it is stored in the state directory;
+   `wardenctl status` shows what decided the mode, `wardenctl dry-run reset`
+   returns to the configuration). Or set `dry_run = false` in `warden.toml`
+   and `systemctl reload wardend` (or install with `install.sh --enforce`);
+   a change of `dry_run` in the configuration wins over an older override.
 
-## Конфигурация
+## Configuration
 
-Всё живёт в `/etc/warden/warden.toml`, с drop-in'ами в `/etc/warden/conf.d/*.toml` (сливаются по порядку; списки записей вроде `[[fim.site]]`, `[[policy]]`, `[[health.check]]` добавляются, всё остальное — включая плейбуки вроде `disk.cleanup` или `memory.on_critical` — заменяется). Пустой файл валиден — у каждой настройки есть производственно-разумный дефолт. Опечатка — ошибка старта, а не молча проигнорированная настройка:
+Everything lives in `/etc/warden/warden.toml`, with drop-ins in
+`/etc/warden/conf.d/*.toml` (merged in order; record lists such as
+`[[fim.site]]`, `[[policy]]`, `[[health.check]]` are appended, everything
+else — including playbooks such as `disk.cleanup` or `memory.on_critical` —
+is replaced). An empty file is valid — every setting has a
+production-sane default. A typo is a startup error, not a silently ignored
+setting:
 
 ```bash
 wardend --check-config          # validate
 wardend --print-defaults        # dump all defaults as commented TOML
 ```
 
-Полностью закомментированный [`config/warden.toml`](config/warden.toml) документирует каждую опцию. Минимальное дополнение для веб-сервера:
+The fully commented [`config/warden.toml`](config/warden.toml) documents every
+option. A minimal web-server addition:
 
 ```toml
 # /etc/warden/conf.d/90-sites.toml
@@ -152,14 +260,14 @@ allowlist = ["127.0.0.0/8", "::1/128", "198.51.100.0/24"]   # your admin/monitor
 auto_restart = ["nginx.service", "php8.3-fpm.service"]
 ```
 
-### Тот самый «время обнаружения» из запроса
+### The detection-time knob you asked about
 
 ```toml
 [memory.swap_storm]
 sustain = "60s"   # how long sustained swapping must last before Warden acts
                   # ("долгий свопинг, когда сервер зависает надолго")
 ```
-и триггер PSI в ядре для мгновенной реакции:
+and the kernel PSI trigger for instant reaction:
 ```toml
 [memory.trigger]
 enabled = true
@@ -168,35 +276,39 @@ stall   = "150ms"    # like: echo "some 150000 1000000" > /proc/pressure/memory
 window  = "1s"
 ```
 
-## Шпаргалка `wardenctl`
+## `wardenctl` cheat sheet
 
-| команда | что делает |
+| command | what |
 |---|---|
-| `wardenctl status` | уровни, сенсоры, состояние обучения |
-| `wardenctl events [-n N] [-s warning] [-f]` | последние события (слежение с `-f`) |
-| `wardenctl top` | ранжирование виновников памяти (кого убьют и почему) |
-| `wardenctl scores` | живые оценки эвристической подозрительности |
-| `wardenctl mem-top --interval 2s` | RSS/swap/major-faults-в-секунду по процессам |
-| `wardenctl psi` | текущий PSI для cpu/memory/io |
-| `wardenctl fim status \| scan [site] \| accept <site> [path] \| pause <site> 30m` | управление FIM (пауза вокруг деплоев) |
-| `wardenctl block <ip> [--ttl 1h] \| unblock <ip> \| blocklist` | фаервол |
-| `wardenctl quarantine list \| restore <id>` | файлы в карантине |
-| `wardenctl snapshot [reason]` | снять диагностический снимок сейчас |
-| `wardenctl tuning [--revert]` | советы по тюнингу ядра; изменения sysctl, сделанные Warden (и откат) |
-| `wardenctl profile [-i 10]` | **собственные** CPU / I/O / память Warden по потокам, детекторам и областям кучи |
-| `wardenctl doctor` | **офлайн**-проверка возможностей хоста + диагностика установленного юнита (seccomp/caps/crash) |
-| `wardenctl scan /var/www` | **офлайн**-скан дерева сигнатурами |
-| `wardenctl du [/var] [-d 2] [-n 15] [--idle]` | **офлайн**-«кто занимает диск»: самые большие каталоги по уровням и файлы (одна файловая система, с ограничениями) |
+| `wardenctl status` | levels, sensors, learning state |
+| `wardenctl events [-n N] [-s warning] [-f]` | recent events (follow with `-f`) |
+| `wardenctl top` | memory culprit ranking (who gets killed and why) |
+| `wardenctl scores` | live heuristic suspicion scores |
+| `wardenctl mem-top --interval 2s` | per-process RSS/swap/major-faults-per-sec |
+| `wardenctl psi` | current PSI for cpu/memory/io |
+| `wardenctl fim status \| scan [site] \| accept <site> [path] \| pause <site> 30m` | FIM control (pause around deploys) |
+| `wardenctl block <ip> [--ttl 1h] \| unblock <ip> \| blocklist` | firewall |
+| `wardenctl quarantine list \| restore <id>` | quarantined files |
+| `wardenctl snapshot [reason]` | capture a diagnostic snapshot now |
+| `wardenctl tuning [--revert]` | kernel tuning advice; sysctl changes Warden made (and undo) |
+| `wardenctl profile [-i 10]` | Warden's **own** CPU / I/O / memory per thread, per detector and per heap scope |
+| `wardenctl doctor` | **offline** host capability check + installed unit (seccomp/caps/crash) diagnosis |
+| `wardenctl scan /var/www` | **offline** signature scan of a tree |
+| `wardenctl du [/var] [-d 2] [-n 15] [--idle]` | **offline** who is using the disk: biggest directories per level and files (one filesystem, bounded) |
 
-## Наблюдаемость
+## Observability
 
-`http://127.0.0.1:9184/metrics` (Prometheus) отдаёт PSI-гейджи, память/своп, заполнение диска и ETA заполнения по точке монтирования, время тика по детектору, счётчики событий/действий, освобождённые байты, размер блоклиста, up/down сенсоров и многое другое.
-`/health` возвращает 503, если heartbeat быстрого планировщика устарел (тот же сигнал, что питает watchdog systemd). Warden также профилирует себя:
+`http://127.0.0.1:9184/metrics` (Prometheus) exposes PSI gauges, memory/swap,
+disk usage and fill-ETA per mount, per-detector tick time, event/action
+counters, bytes reclaimed, blocklist size, sensor up/down and more.
+`/health` returns 503 if the fast scheduler's heartbeat goes stale (the same
+signal that drives the systemd watchdog). Warden also profiles itself:
 `warden_module_cpu_seconds_total`, `warden_module_heap_bytes`,
 `warden_thread_cpu_seconds_total`, `warden_self_cgroup_memory_bytes{kind=anon|page_cache|kernel}`
-— см. [docs/performance.md](docs/performance.md), сколько стоит каждый модуль. Каждое событие и результат действия также пишется как JSON в `/var/log/warden/events.jsonl` (с ротацией).
+— see [docs/performance.md](docs/performance.md) for what each module costs. Every event and action result is
+also written as JSON to `/var/log/warden/events.jsonl` (rotated).
 
-## Структура проекта
+## Project layout
 
 ```
 crates/
@@ -216,9 +328,10 @@ fuzz/               cargo-fuzz targets for every parser of untrusted input (bodi
 bench/              profile.py (per-module CPU/I/O/RAM matrix) · dhat_modules.py (heap by module)
 docs/               architecture · detectors · integrations (web stacks, ModSecurity, DB, containers) · security ·
                     events (catalogue of every event) · performance (measured cost of every module) ·
+                    reviews/ (code review and audit reports, Russian)
 ```
 
-## Сборка и тестирование
+## Building & testing
 
 ```bash
 cargo build --release --workspace
@@ -231,33 +344,43 @@ cd fuzz && cargo +nightly fuzz run access_log   # libFuzzer; `cargo test -p ward
 ./scripts/build-deb.sh --portable # the release package (linked in an Ubuntu 22.04 container)
 ```
 
-CI дополнительно ставит настоящий юнит systemd на свежую ВМ Ubuntu 24.04, запускает его, проверяет, что он остаётся работать без рестартов и core dump'ов, и заставляет поймать веб-шелл — класс отказов, который unit-тесты увидеть не могут. Он собирает `.deb` на Ubuntu 22.04 и устанавливает и запускает его в чистых контейнерах Debian 12, Ubuntu 22.04 и 24.04; измеряет покрытие на каждом push и pull request (сводка задания и комментарий в PR; сборка падает ниже порога или когда покрытие падает более чем на полпункта относительно последнего замера main); и фаззит каждый парсер недоверенного ввода по минуте на цель.
+CI additionally installs the real systemd unit on a fresh Ubuntu 24.04 VM,
+starts it, checks it stays up without restarts or core dumps, and has it
+catch a webshell — the class of failure unit tests cannot see. It builds the
+`.deb` on Ubuntu 22.04 and installs and starts it in clean Debian 12,
+Ubuntu 22.04 and 24.04 containers; measures coverage on every push and pull
+request (job summary and a PR comment; the build fails below the floor or
+when coverage drops more than half a point under main's); and fuzzes every
+parser of untrusted input for a minute per target.
 
-Набор тестов обширен и намеренно задействует реальные интерфейсы ядра (он разбирает живой `/proc`, открывает pidfd, регистрирует триггеры PSI и метки fanotify), а не только моки, плюс полный end-to-end тест, который поднимает бинарник `wardend` и обрушивает на него настоящие инциденты.
+The test suite is extensive and deliberately exercises real kernel interfaces
+(it parses live `/proc`, opens pidfds, registers PSI triggers and fanotify
+marks) rather than only mocks, plus a full end-to-end test that boots the
+`wardend` binary and fires real incidents at it.
 
-## Совместимость
+## Compatibility
 
-| возможность | требует | без этого |
+| feature | needs | without it |
 |---|---|---|
-| бинарники | glibc 2.34+ (Debian 12, Ubuntu 22.04, RHEL 9 и новее) | — |
-| давление PSI и триггеры | Linux 4.20+, `CONFIG_PSI=y` (загрузка с `psi=1` на RHEL) | обнаружение давления деградирует |
-| kill без гонок | pidfd (Linux 5.3+) | откат к перепроверке времени старта |
-| события процессов в реальном времени | proc connector + `CAP_NET_ADMIN` (события fork фильтруются в ядре на 6.6+) | откат к периодическим сканам `/proc` |
-| обнаружение SUID/SGID в реальном времени | fanotify `FAN_REPORT_DFID_NAME` (Linux 5.9+), `CAP_SYS_ADMIN` + `CAP_DAC_READ_SEARCH` | только периодический обход |
-| мгновенные оповещения об упавших юнитах | systemd + системная D-Bus | опрос `systemctl` каждые `systemd.interval` |
-| веб-FIM в реальном времени | fanotify + `CAP_SYS_ADMIN` | откат к плановым сканам |
-| заморозка/kill сервиса | cgroup v2 | эти действия недоступны |
-| блокировка IP | `nft` | действия блокировки падают (сообщается) |
-| события auth, vacuum журнала | systemd/journalctl (иначе auth.log) | читает файл лога вместо этого |
-| корреляция WAF | ModSecurity v2 или v3, пишущая аудит- или error-лог | — |
-| карантин файлов с `chattr +i` | `CAP_LINUX_IMMUTABLE` (выдаётся юнитом) | карантин падает с EPERM (сообщается) |
+| the binaries | glibc 2.34+ (Debian 12, Ubuntu 22.04, RHEL 9 and newer) | — |
+| PSI pressure & triggers | Linux 4.20+, `CONFIG_PSI=y` (boot `psi=1` on RHEL) | pressure detection degraded |
+| race-free kill | pidfd (Linux 5.3+) | falls back to start-time re-check |
+| real-time process events | proc connector + `CAP_NET_ADMIN` (fork events filtered in the kernel on 6.6+) | falls back to periodic `/proc` scans |
+| real-time SUID/SGID detection | fanotify `FAN_REPORT_DFID_NAME` (Linux 5.9+), `CAP_SYS_ADMIN` + `CAP_DAC_READ_SEARCH` | periodic walk only |
+| instant failed-unit alerts | systemd + system D-Bus | `systemctl` polling every `systemd.interval` |
+| real-time web FIM | fanotify + `CAP_SYS_ADMIN` | falls back to scheduled scans |
+| freeze/kill a service | cgroup v2 | those actions unavailable |
+| IP blocking | `nft` | block actions fail (reported) |
+| auth events, journal vacuum | systemd/journalctl (else auth.log) | reads the log file instead |
+| WAF correlation | ModSecurity v2 or v3 writing an audit or error log | — |
+| quarantine of `chattr +i` files | `CAP_LINUX_IMMUTABLE` (granted by the unit) | quarantine fails with EPERM (reported) |
 
-Запустите `wardenctl doctor` на любом хосте для окончательного отчёта.
+Run `wardenctl doctor` on any host for a definitive report.
 
-## Лицензия
+## License
 
-MIT — см. [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
 
-> ⚠️ **Бета.** Warden выполняет разрушительные действия на вашей системе. Начните с
-> `dry_run = true` (значение по умолчанию), просмотрите, что бы он сделал, и держите лимиты
-> предохранителей консервативными, пока не доверитесь ему в вашей среде.
+> ⚠️ **Beta.** Warden takes destructive actions on your system. Start in
+> `dry_run = true` (the default), review what it would do, and keep the circuit-breaker
+> budgets conservative until you trust it in your environment.

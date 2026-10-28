@@ -112,11 +112,14 @@ pub fn parse_kv_line(line: &str) -> Option<(&str, &str)> {
 }
 
 /// Parse the first number of a `"123 kB"` style value; kB are converted to bytes.
+/// A value too large for bytes in a `u64` is not a value (`None`): the
+/// kernel never writes one, a fuzzer or a corrupt file can, and a
+/// multiplication that wraps would turn it into a small plausible number.
 pub fn parse_kb_value(v: &str) -> Option<u64> {
     let mut it = v.split_whitespace();
     let n: u64 = it.next()?.parse().ok()?;
     match it.next() {
-        Some("kB") => Some(n * 1024),
+        Some("kB") => n.checked_mul(1024),
         _ => Some(n),
     }
 }
@@ -249,6 +252,11 @@ mod tests {
         assert_eq!(k, "VmRSS");
         assert_eq!(parse_kb_value(v), Some(1234 * 1024));
         assert_eq!(parse_kb_value("17"), Some(17));
+        // the input the fuzzer found (CI run 109604677194): it used to panic
+        // in debug builds and wrap to a small number in release builds
+        assert_eq!(parse_kb_value("99999999999999999 kB"), None);
+        assert_eq!(parse_kb_value("18014398509481983 kB"), Some(18_014_398_509_481_983 * 1024));
+        assert_eq!(parse_kb_value("18014398509481984 kB"), None);
         assert!(clk_tck() > 0 && page_size() >= 4096 && nproc() >= 1);
     }
 

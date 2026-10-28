@@ -56,6 +56,16 @@ fn reference_config_is_valid_and_matches_defaults() {
     assert_eq!(c.disk.usage_report_max_entries, d.disk.usage_report_max_entries);
     assert_eq!(c.disk.usage_report_max_time, d.disk.usage_report_max_time);
     assert_eq!(c.hardware.clock_max_error, d.hardware.clock_max_error);
+    // 0.14.2
+    assert_eq!(c.actions.containment_reserve, d.actions.containment_reserve);
+    assert_eq!(c.actions.firewall.max_blocks_per_hour, d.actions.firewall.max_blocks_per_hour);
+    assert_eq!(c.actions.firewall.protect_ssh_sessions, d.actions.firewall.protect_ssh_sessions);
+    assert_eq!(c.actions.firewall.ssh_ports, d.actions.firewall.ssh_ports);
+    assert_eq!(c.memory.act_on_psi_alone, d.memory.act_on_psi_alone);
+    assert_eq!(c.auth.trust_file, d.auth.trust_file);
+    assert_eq!(c.fim.trust_writable_logs, d.fim.trust_writable_logs);
+    assert_eq!(c.waf.trust_writable_logs, d.waf.trust_writable_logs);
+    assert_eq!(c.waf.discover, d.waf.discover);
 }
 
 #[test]

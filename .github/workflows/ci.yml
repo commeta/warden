@@ -4,6 +4,9 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  # nightly: every fuzz target for 10 minutes on the cached corpus
+  schedule:
+    - cron: "17 2 * * *"
   workflow_dispatch:
     inputs:
       fuzz_only:
@@ -15,10 +18,17 @@ on:
         description: "Fuzz target to run in fuzz-only mode"
         type: choice
         required: false
-        default: procfs
+        default: all
         options:
-          - procfs
           - all
+          - access_log
+          - modsecurity
+          - dbus
+          - proc_connector
+          - fanotify
+          - procfs
+          - auth_log
+          - redact
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -33,7 +43,7 @@ env:
 
 jobs:
   test:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true) }}
     name: test & lint (Rust 1.99.1)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -54,7 +64,7 @@ jobs:
   # Known-vulnerable dependencies and unused ones fail the build: both used to
   # surface only in a manual review.
   dependencies:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true) }}
     name: dependencies (audit, unused)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -71,7 +81,7 @@ jobs:
   # Install and run the real systemd unit. The active webshell check is opt-in
   # until its realtime FIM event path is reliable on hosted runners.
   service:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true) }}
     name: systemd service smoke test
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -115,7 +125,7 @@ jobs:
           sudo journalctl -u wardend -n 200 --no-pager || true
 
   coverage:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true) }}
     name: coverage (llvm-cov)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -191,55 +201,80 @@ jobs:
             cov.json
             cov.txt
 
-  # The native fuzz run currently finds an integer-overflow crash in
-  # parse_kb_value. Keep it opt-in until that bug is fixed. The lightweight
-  # warden-fuzz crate tests still run in the serial workspace test job.
+  # libFuzzer on every parser of untrusted input: one job per target, so one
+  # crash does not hide the others, a minute per push and pull request, ten
+  # minutes every night on the corpus the previous runs grew. The nightly
+  # toolchain is pinned (a floating nightly broke the job twice); bump it on
+  # purpose. Crashes are uploaded and their inputs belong in
+  # fuzz/corpus/<target>/regress-*, which `cargo test -p warden-fuzz` replays.
   fuzz:
-    name: fuzz smoke (cargo-fuzz; opt-in)
-    if: ${{ vars.ENABLE_FUZZ_CI == 'true' || (github.event_name == 'workflow_dispatch' && inputs.fuzz_only == true) }}
+    name: fuzz ${{ matrix.target }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [access_log, modsecurity, dbus, proc_connector, fanotify, procfs, auth_log, redact]
+    env:
+      FUZZ_TOOLCHAIN: nightly-2026-10-01
+      FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '600' || '60' }}
     steps:
+      # (a job-level `if` cannot see the matrix)
+      - name: Selected?
+        id: sel
+        env:
+          ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.fuzz_only == true && inputs.fuzz_target || 'all' }}
+        run: |
+          if [ "$ONLY" = all ] || [ "$ONLY" = "${{ matrix.target }}" ]; then echo run=true; else echo run=false; fi >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
+        if: steps.sel.outputs.run == 'true'
       - uses: dtolnay/rust-toolchain@master
+        if: steps.sel.outputs.run == 'true'
         with:
-          toolchain: nightly
+          toolchain: ${{ env.FUZZ_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
+        if: steps.sel.outputs.run == 'true'
         with:
           workspaces: fuzz
-      - run: cargo install cargo-fuzz --locked
-      - name: Run selected target(s) for 60 s
+          key: ${{ env.FUZZ_TOOLCHAIN }}
+      - uses: taiki-e/install-action@v2
+        if: steps.sel.outputs.run == 'true'
+        with:
+          tool: cargo-fuzz
+      - name: Restore the corpus grown by earlier runs
+        if: steps.sel.outputs.run == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: fuzz/corpus-grown/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Run ${{ matrix.target }} for ${{ env.FUZZ_SECONDS }} s
+        if: steps.sel.outputs.run == 'true'
         working-directory: fuzz
-        env:
-          FUZZ_ONLY: ${{ inputs.fuzz_only }}
-          FUZZ_TARGET: ${{ inputs.fuzz_target }}
         run: |
-          targets="$(cargo fuzz list)"
-          if [[ "$FUZZ_ONLY" == "true" && "$FUZZ_TARGET" != "all" ]]; then
-            targets="$FUZZ_TARGET"
-          fi
-          : > fuzz-run.log
-          for t in $targets; do
-            echo "::group::$t"
-            set +e
-            cargo fuzz run "$t" -- -max_total_time=60 -max_len=8192 -rss_limit_mb=1024 -timeout=10 2>&1 | tee -a fuzz-run.log
-            status=${PIPESTATUS[0]}
-            set -e
-            echo "::endgroup::"
-            if [ "$status" -ne 0 ]; then exit "$status"; fi
-          done
+          mkdir -p "corpus-grown/${{ matrix.target }}"
+          cargo +"$FUZZ_TOOLCHAIN" fuzz run "${{ matrix.target }}" \
+            "corpus-grown/${{ matrix.target }}" "corpus/${{ matrix.target }}" -- \
+            -max_total_time="$FUZZ_SECONDS" -max_len=8192 -rss_limit_mb=1024 -timeout=10 2>&1 | tee fuzz-run.log
+          exit "${PIPESTATUS[0]}"
+      - name: Keep the grown corpus
+        if: always() && steps.sel.outputs.run == 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: fuzz/corpus-grown/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
-          name: fuzz-artifacts
+          name: fuzz-crash-${{ matrix.target }}
           path: |
-            fuzz/artifacts
+            fuzz/artifacts/${{ matrix.target }}
             fuzz/fuzz-run.log
 
   # Release packages are linked on Ubuntu 22.04 (glibc 2.35) and checked before
   # installation on the supported Debian/Ubuntu releases.
   package:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true) }}
     name: build .deb (on Ubuntu 22.04)
     runs-on: ubuntu-22.04
     timeout-minutes: 45
@@ -276,7 +311,7 @@ jobs:
 
   # Install the built package on each supported distribution in a clean container.
   install:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || inputs.fuzz_only != true) }}
     name: install on ${{ matrix.image }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
