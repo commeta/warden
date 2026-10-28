@@ -148,7 +148,7 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" target cov.json cov.txt
       - name: Coverage of main (baseline)
         if: github.event_name == 'pull_request'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: coverage-main.txt
           key: coverage-main-${{ github.sha }}
@@ -181,7 +181,7 @@ jobs:
           [ "$ok" = 1 ]
       - name: Remember main's coverage
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: coverage-main.txt
           key: coverage-main-${{ github.sha }}
@@ -243,7 +243,7 @@ jobs:
           tool: cargo-fuzz
       - name: Restore the corpus grown by earlier runs
         if: steps.sel.outputs.run == 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: fuzz/corpus-grown/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
@@ -259,7 +259,7 @@ jobs:
           exit "${PIPESTATUS[0]}"
       - name: Keep the grown corpus
         if: always() && steps.sel.outputs.run == 'true' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: fuzz/corpus-grown/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
