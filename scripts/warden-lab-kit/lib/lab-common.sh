@@ -11,7 +11,9 @@ lab_load_config() {
   (( (8#$mode & 077) == 0 )) || lab_die "lab.env must have no group/other permissions; run chmod 600 lab.env"
   LAB_IP=127.0.0.1 ATTACKER_IP=127.0.0.2
   DB_NAME=wardenlab DB_USER=wardenlab DB_PASSWORD=GENERATE
-  WARDEN_VERSION=0.14.1 WARDEN_DEB_SHA256=3a0dc209106f7f079b06db0a2c2d2f4ce201b4072f16df577c94997c6260174b
+  # No default release: the version and its SHA-256 pin come from lab.env
+  # alone (a default here went stale with every release — L8 of the 0.14.2 review).
+  WARDEN_VERSION="" WARDEN_DEB_SHA256=""
   while IFS= read -r line || [[ -n "$line" ]]; do
     ((lineno+=1))
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
@@ -40,6 +42,7 @@ PY
   [[ "$DB_NAME" =~ ^[A-Za-z0-9_]{1,32}$ ]] || lab_die "Unsafe DB_NAME"
   [[ "$DB_USER" =~ ^[A-Za-z0-9_]{1,32}$ ]] || lab_die "Unsafe DB_USER"
   [[ "$DB_PASSWORD" == GENERATE || "$DB_PASSWORD" =~ ^[A-Fa-f0-9]{16,128}$ ]] || lab_die "DB_PASSWORD must be GENERATE or 16..128 hex characters"
+  [[ -n "$WARDEN_VERSION" && -n "$WARDEN_DEB_SHA256" ]] || lab_die "Set WARDEN_VERSION and WARDEN_DEB_SHA256 in lab.env (see lab.env.example)"
   [[ "$WARDEN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || lab_die "WARDEN_VERSION must be numeric x.y.z"
   [[ "$WARDEN_DEB_SHA256" =~ ^[A-Fa-f0-9]{64}$ ]] || lab_die "WARDEN_DEB_SHA256 must be 64 hex characters"
 }
@@ -49,3 +52,5 @@ lab_require_loopback() {
   [[ -n "$output" ]] || lab_die "Loopback interface lo is unavailable"
   grep -Eq '(^|[[:space:]])127\.0\.0\.1/8([[:space:]]|$)' <<< "$output" || lab_die "127.0.0.1/8 is not configured on lo"
 }
+# The SHA-256 placeholder of lab.env.example: the release is not pinned yet.
+lab_sha_unpinned() { [[ "$1" =~ ^0{64}$ ]]; }

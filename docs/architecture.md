@@ -19,10 +19,12 @@ deduplicates, journals, scores and notifies, and finally hands any attached
                        │              │        heuristics ·    │metrics  │
                        │              │        notifications   │         │
                        │              │                        ▼         │
-                       │              │                    Responder     │
-                       │              │        kill · stop · cgroup ·    │
-                       │              │        quarantine · cleanup ·    │
-                       │   results ◀──┘        block_ip · snapshot       │
+                       │              │          Responder, three lanes: │
+                       │              │   contain: kill · stop · cgroup ·│
+                       │              │            quarantine · throttle │
+                       │              │   network: block_ip, in batches  │
+                       │   results ◀──┘   slow:    cleanup · restart ·   │
+                       │                           hooks · snapshot      │
                        │                                                 │
                        │   control.sock (root) ◀── wardenctl             │
                        │   127.0.0.1:9184 /metrics /health               │
@@ -77,19 +79,38 @@ lock, so a concurrent re-enable can never be lost).
   `tuning`, `/health` and shutdown never wait for a running action or hook.
   Accept loops retry on errors, pause on descriptor exhaustion and cap
   concurrent clients.
-* **Responder**, two supervised lanes, and the **notifier**, each a thread
-  with a bounded queue. Events whose actions contain containment — `kill`,
-  `stop`, `freeze_cgroup`, `kill_cgroup`, `block_ip`, `quarantine`,
-  `throttle` — go to the *urgent* lane; everything else (`restart_unit`,
-  `apt_clean`, journal vacuum, file cleanup, `exec` hooks, `limit_unit`,
-  `sysctl`, a lone snapshot) to the *slow* lane, so a kill during a 5-minute
-  `apt-get clean` does not wait for it. Within a lane actions run
-  sequentially; every kill is in the urgent lane, so two kills never race.
-  The lanes share one set of circuit breakers (the hourly budgets,
-  cooldowns, the snapshot interval: a slot is reserved under a short lock
-  and given back if the action was not attempted). Notifications never
-  block detection. A panic restarts the thread; on shutdown the daemon waits
-  for both lanes to finish their current action.
+* **Responder**, three supervised lanes, and the **notifier**, each a thread
+  with a bounded queue:
+  * the *containment* lane — events whose actions contain `kill`, `stop`,
+    `freeze_cgroup`, `kill_cgroup`, `quarantine` or `throttle`. Its queue
+    (1 024 events) is a priority queue like the engine's: when it is full it
+    gives up its least important event, never a kill for a lesser one;
+  * the *network* lane — every `block_ip` step, as a job of its own (queue
+    of 16 384). It takes up to 512 jobs at a time — a block waits at most
+    100 ms for others to join it — runs the checks one by one (cooldown, dry
+    run, `max_blocks_per_hour`, protected SSH sessions, allowlist), merges
+    jobs for the same target and adds what passed in **one nft
+    transaction**. Once a minute it counts the blocklist again
+    (`warden_blocklist_entries`) instead of listing the sets on a block;
+  * the *slow* lane — everything else (`restart_unit`, `apt_clean`, journal
+    vacuum, file cleanup, `exec` hooks, `limit_unit`, `sysctl`, a lone
+    snapshot).
+
+  An event with a kill and a block is split: the kill goes to containment,
+  the block to the network lane. So a kill waits neither for a 5-minute
+  `apt-get clean` nor for a storm of blocks — in 0.14.2 blocks shared the
+  kill's lane, one `nft` process per address, and 400 attacking addresses
+  a second held a kill up for 2.5–3.1 s and dropped 2 358 queued events
+  (N23 of the 0.14.2 review; 0.14.3: 1–2 ms, nothing dropped). Within a
+  lane actions run sequentially; every kill is in the containment lane, so
+  two kills never race. The lanes share one set of circuit breakers (the
+  hourly budgets, cooldowns, the snapshot interval: a slot is reserved
+  under a short lock and given back if the action was not attempted).
+  Work that cannot be queued is counted (`warden_queue_dropped_total`) and
+  reported once a minute in a `warden.queue_overflow` event (critical when
+  containment was lost). Notifications never block detection. A panic
+  restarts the thread; on shutdown the daemon waits for the lanes to finish
+  their current action.
 
 The daemon measures itself: every detector tick is wrapped in
 `getrusage(RUSAGE_THREAD)` + `/proc/thread-self/io`, and a tracking allocator
@@ -135,14 +156,25 @@ rather than propagated.
    add-or-replace actions).
 3. Action-less events are **deduplicated** within a window (escalations in
    severity always pass).
-4. The event is **logged** (tracing) and **journaled** (JSON lines, rotated).
-5. **Heuristics** accumulate per-process and per-IP suspicion with
-   exponential decay; crossing a threshold emits a new `heuristics.*` event
-   (which re-enters the pipeline and can itself carry actions).
+4. The event is **journaled** (JSON lines, rotated) and logged by the
+   daemon (warnings and above; informational events only at `debug`).
+   Informational findings of one kind are journaled at most
+   `events.max_info_per_minute` times a minute (600): a flood of `waf.hit`
+   no longer rotates the history of real incidents away (N33); the rest are
+   counted (`warden_journal_suppressed_total{kind}`) and summed up once a
+   minute in `warden.journal_suppressed`. Resolutions, action results and
+   `warden.*` events are never held back, and a held-back event is still
+   scored, notified and acted on.
+5. **Heuristics** accumulate per-process and per-peer suspicion with
+   exponential decay — a peer is an address, or for IPv6 the network of
+   `actions.firewall.ipv6_prefix` bits (a /64) that holds it; crossing a
+   threshold emits a new `heuristics.*` event (which re-enters the pipeline
+   and can itself carry actions).
 6. The event is **notified** (webhook / Telegram / command), subject to its
    own dedup and rate limit.
-7. If it carries actions and is not a "resolved" event, it goes to the
-   **responder**; each action's outcome returns as an `action.*` event.
+7. If it carries actions and is not a "resolved" event, its actions go to
+   the **responder**'s lanes; each action's outcome returns as an
+   `action.*` event.
 
 ## Safety model
 
@@ -159,12 +191,22 @@ Destructive actions pass through, in order:
 * **identity pinning** — a process is signalled through a `pidfd` only after
   its start-time is re-verified, so a recycled PID is never hit.
 * **circuit breakers** — global budgets (`max_kills_per_hour`,
-  `max_actions_per_hour`), per-target cooldowns (keyed by the complete action
-  and its target, so the steps of a playbook do not share one), per-unit
-  restart budgets (`systemd.max_restarts_per_hour`, the only one). A budget
-  is consulted before an action and charged only once the action was really
-  attempted: a refusal (protected target), a skip (the process is already
-  gone) or a dry run costs nothing.
+  `max_actions_per_hour`, and `actions.firewall.max_blocks_per_hour` for
+  blocks alone, so a flood of attacker addresses cannot use up what
+  containment needs; the last `containment_reserve` slots of the shared
+  budget are for containment only), per-target cooldowns (keyed by the
+  complete action and its target, so the steps of a playbook do not share
+  one), per-unit restart budgets (`systemd.max_restarts_per_hour`, the only
+  one). A budget is consulted before an action and charged only once the
+  action was really attempted: a refusal (protected target), a skip (the
+  process is already gone) or a dry run costs nothing.
+* **blocks that cannot lock the administrator out** — the allowlist
+  (`actions.firewall.allowlist` and `auth.allowlist`), and an address with an
+  established SSH session to the host, which only SSH evidence from the
+  journal may block (`protect_ssh_sessions`). An IPv6 network is blocked as
+  a whole only when no allowlisted address and no other address with an SSH
+  session is in it; otherwise only the attacking address is, and the result
+  says why.
 * **path guards** — cleanup never touches `/etc`, `/usr`, `/var/lib`, `…/.ssh`
   etc.; quarantine only acts under a configured site root or a temp dir.
   Cleanup, quarantine and the disk walks work on **directory descriptors**
@@ -204,6 +246,25 @@ reported when it starts (with its actions), reminded with an exponential
 back-off while it holds, and resolved when it stops. Its fingerprint is
 `kind[:detail]:<severity>`, its resolution `kind[:detail]:resolved` — a
 convention checked by a test on the sources.
+
+## The firewall
+
+Warden owns one nftables table, `inet warden` (`actions.firewall.table`):
+`blocklist4` (IPv4 addresses), `blocklist6` (single IPv6 addresses),
+`blocklist6_64` (IPv6 networks of `ipv6_prefix` bits, stored as the network
+address and matched by `ip6 saddr & ffff:ffff:ffff:ffff:: @blocklist6_64`)
+and an `input` chain at priority `filter - 10`. All sets are plain hash sets
+with kernel timeouts: an addition costs ~3 ms whatever the set's size (with
+an interval set, nft reads every element on every call: 0.33 s at 45 000
+networks), and a /128 and its /64 can both be blocked. The table is created
+at the first block and blocks survive a restart of the daemon. A table that
+disappeared (`nft flush ruleset`, a firewall reload) is noticed by the
+minute's count or the next block and recreated then — empty: the blocks it
+held are gone until their attackers return (N32 of the 0.14.2 review,
+planned for 0.15). A network set
+of an earlier `ipv6_prefix` keeps being matched until its last block has
+expired, then it is removed. `packaging/nftables/warden.nft` is the same
+table as a file.
 
 ## State on disk
 

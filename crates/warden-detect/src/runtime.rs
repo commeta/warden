@@ -243,7 +243,10 @@ impl Shared {
             config.heuristics.lineage_learning,
             config.heuristics.lineage,
         );
-        let heuristics = crate::heuristics::Heuristics::new(&config.heuristics);
+        let mut heuristics = crate::heuristics::Heuristics::new(&config.heuristics);
+        heuristics.set_ipv6_prefix(config.actions.firewall.ipv6_prefix);
+        let waf = crate::waf::WafRecent::default();
+        waf.set_ipv6_prefix(config.actions.firewall.ipv6_prefix);
         let sh = Arc::new(Self {
             this: Mutex::new(std::sync::Weak::new()),
             lineage: Mutex::new(lineage),
@@ -262,7 +265,7 @@ impl Shared {
             users: Mutex::new(warden_sys::users::Users::load()),
             culprits: Mutex::new(Vec::new()),
             access: Default::default(),
-            waf: Default::default(),
+            waf,
             waf_sources: Mutex::new(serde_json::json!({ "sources": [], "problems": [] })),
             suid_rt: Mutex::new(Default::default()),
             systemd: Mutex::new(Default::default()),
@@ -290,6 +293,10 @@ impl Shared {
     /// schedulers rebuild their detectors, sensors restart, the FIM worker
     /// reloads its sites.
     pub fn replace_config(&self, c: Config) {
+        // tables keyed by address follow the aggregation they were built with
+        let prefix = c.actions.firewall.ipv6_prefix;
+        lock(&self.heuristics).set_ipv6_prefix(prefix);
+        self.waf.set_ipv6_prefix(prefix);
         *write(&self.config) = Arc::new(c);
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.notify_all();

@@ -151,33 +151,17 @@ Where this matters:
   before the request — the user field before it comes from the client and
   may contain brackets — and the correlation ring is bounded by when lines
   arrived, so a forged or skewed time cannot empty it.
-* **The auth log file** (0.14.2). A syslog file does not record who sent a
-  line: `logger -t sshd "Failed password for root from <victim>"` lands in
-  `auth.log` like a real `sshd` line. `auth.source = "auto"` reads journald
-  whenever it runs, which records the sender; lines read from the file are
-  evidence but do not block unless `auth.trust_file = true`.
-* **Logs a web user can write** (0.14.2). A webshell runs as the web user;
-  if that user can write a log Warden reads (nginx on Debian owns its logs
-  as `www-data`, ModSecurity-nginx workers write the audit log, the workers
-  of a concurrent audit log own its files), it can name any address in it.
-  Warden checks the owner and mode of every WAF and access log and their
-  directories against `process.web_users` and their groups, reports a
-  writable one (`log_trust` in the event, `wardenctl doctor`), and does not
-  block on a web-writable access log (`fim.trust_writable_logs = false`).
-  WAF logs still block by default (`waf.trust_writable_logs = true`: on
-  such servers there is no other source).
-* **Live SSH sessions** (0.14.2). Whatever the evidence, an address with an
-  established SSH session to the host is not blocked
-  (`actions.firewall.protect_ssh_sessions`), unless the evidence is about
-  SSH itself and comes from the journal: a forged line cannot lock the
-  administrator out. Allow-list admin networks anyway.
-* **Concurrent ModSecurity logs.** The index and the transaction files are
-  written by the web server's workers: files are opened below the storage
-  directory one component at a time without following symlinks, only
-  regular files of bounded size are read, in batches, none skipped; an
-  entry whose MD5 differs from its index line is ignored and reported.
-* **Web server configuration** read by WAF discovery must be owned by root
-  and not writable by others; anything else is skipped and reported.
+* **Attacker addresses.** An IPv6 client picks its address from its whole
+  prefix — a /64 at least (RFC 6177) — and can send every request from a
+  new one. Since 0.14.3 every table that counts or scores a remote peer
+  (WAF, SSH brute force, heuristics, the WAF history the FIM correlates
+  with, the FIM's own blocks) keys IPv6 by the network of
+  `actions.firewall.ipv6_prefix` bits (64), and the block takes the
+  network. In 0.14.2 an attacker with one /64 was never blocked: 4 000
+  addresses × 4 rejected requests, no block (N25). The network is blocked
+  as a whole only when nothing in it is allowlisted and no other address in
+  it has an SSH session to the host; otherwise only the attacking address.
+  IPv4 is never aggregated: behind a CGNAT a /24 is other people.
 
 ## Failure behaviour
 
@@ -197,8 +181,16 @@ Where this matters:
   and counted (`warden_events_dropped_total{priority}`), never blocking
   detection or remediation — the least important first: noise an attacker
   generates to hide a finding evicts only other noise, never a `security.*`
-  or critical event. Containment actions have their own executor lane, so a
-  slow cleanup or hook cannot delay a kill.
+  or critical event. Containment actions have their own executor lane with
+  the same rule, blocks a lane of their own that batches them into nft
+  transactions, and slow cleanups and hooks a third: neither a slow cleanup
+  nor a storm of blocks can delay a kill. Whatever a lane could not take is
+  reported in `warden.queue_overflow` — the first loss at once, then once a minute.
+* A flood of informational findings (one `waf.hit` per new attacker
+  address) cannot rotate the journal's history away: each kind is
+  journaled at most `events.max_info_per_minute` times a minute, the rest
+  counted and summed up (`warden.journal_suppressed`); warnings, critical
+  findings, resolutions and action results are never held back.
 * The systemd **watchdog** restarts Warden if the fast scheduler stops feeding
   its heartbeat (a true hang), and `/health` returns 503 in the same case.
   The heartbeat is measured on the monotonic clock: an NTP step or a resume
@@ -209,7 +201,8 @@ Where this matters:
   (`warden_journal_write_errors_total`) and a failed rotation is retried
   with a back-off.
 * nftables blocks carry kernel **timeouts**, so if Warden dies, blocks expire
-  on their own and nothing needs cleanup.
+  on their own and nothing needs cleanup. The blocklist is counted once a
+  minute; no block lists the sets any more (0.14.2 did, on every block: 0.3 s at 45 000 entries).
 
 ## Safe rollout
 

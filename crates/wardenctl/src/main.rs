@@ -64,16 +64,19 @@ enum Cmd {
     /// Web file-integrity monitoring.
     #[command(subcommand)]
     Fim(FimCmd),
-    /// Block an IP address in the Warden nftables set.
+    /// Block an IP address in the Warden nftables sets: exactly that address,
+    /// or an IPv6 network written with the configured prefix
+    /// (`2001:db8:aa:1::/64`, actions.firewall.ipv6_prefix).
     Block {
         ip: String,
         /// e.g. 1h, 30m, 7d
         #[arg(long)]
         ttl: Option<String>,
     },
-    /// Remove an IP address from the blocklist.
+    /// Remove a block. An IPv6 address lifts the block of its network too;
+    /// a network (`2001:db8:aa:1::/64`) is removed as written.
     Unblock { ip: String },
-    /// Show blocked addresses.
+    /// Show blocked addresses and networks.
     Blocklist,
     /// Quarantined files.
     #[command(subcommand)]

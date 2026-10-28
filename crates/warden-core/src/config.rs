@@ -187,6 +187,14 @@ pub struct EventLogConfig {
     /// Do not record the same fingerprint more often than this.
     #[serde(with = "humantime_serde")]
     pub dedup_window: Duration,
+    /// Informational events of one kind recorded per minute at most. A
+    /// flood (`waf.hit` from thousands of addresses) otherwise fills the
+    /// journal — 64 MB a minute in the 0.14.2 review — and rotation erases
+    /// the history of real incidents (N33). The rest are counted
+    /// (`warden_journal_suppressed_total{kind}`) and summed up once a minute
+    /// in a `warden.journal_suppressed` event. Resolutions, action results
+    /// and `warden.*` events are never held back. 0 = no limit.
+    pub max_info_per_minute: usize,
 }
 
 impl Default for EventLogConfig {
@@ -198,6 +206,7 @@ impl Default for EventLogConfig {
             min_severity: Severity::Info,
             ring_size: 2000,
             dedup_window: secs(60),
+            max_info_per_minute: 600,
         }
     }
 }
@@ -368,6 +377,11 @@ pub struct FirewallConfig {
     /// Never block these networks (CIDR).
     pub allowlist: Vec<String>,
     pub max_blocked: usize,
+    /// IPv6 addresses are counted and blocked by the network of this many
+    /// bits that holds them (48..=128): a /64 is one subscriber, and an
+    /// attacker with one rotates through it at will (N25). 128 = per
+    /// address, as before 0.14.3. IPv4 is always per address.
+    pub ipv6_prefix: u8,
     /// Addresses blocked per hour. Blocks have a budget of their own: an
     /// attacker rotating through an IPv6 prefix must not use up the budget
     /// of the actions that contain a compromise (`max_actions_per_hour`).
@@ -392,6 +406,7 @@ impl Default for FirewallConfig {
             default_ttl: secs(3600),
             allowlist: strings(&["127.0.0.0/8", "::1/128"]),
             max_blocked: 50_000,
+            ipv6_prefix: crate::net::DEFAULT_IPV6_PREFIX,
             max_blocks_per_hour: 10_000,
             protect_ssh_sessions: true,
             ssh_ports: vec![],
@@ -2258,6 +2273,26 @@ impl Config {
                 errs.push(format!("policy #{i} ({}): {e}", p.name.as_deref().unwrap_or("unnamed")));
             }
         }
+        let fw = &self.actions.firewall;
+        if !(crate::net::MIN_IPV6_PREFIX..=128).contains(&fw.ipv6_prefix) {
+            errs.push(format!(
+                "actions.firewall.ipv6_prefix must be within {}..=128, got {}",
+                crate::net::MIN_IPV6_PREFIX,
+                fw.ipv6_prefix
+            ));
+        }
+        // the names go into nft scripts: plain identifiers only
+        for (name, v) in [("table", &fw.table), ("set_v4", &fw.set_v4), ("set_v6", &fw.set_v6)] {
+            let ok = v.len() <= 48
+                && v.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !ok {
+                errs.push(format!("actions.firewall.{name} {v:?}: use letters, digits and '_' (at most 48)"));
+            }
+        }
+        if fw.set_v4 == fw.set_v6 {
+            errs.push("actions.firewall.set_v4 and set_v6 must differ".into());
+        }
         for cidr in self.actions.firewall.allowlist.iter().chain(&self.auth.allowlist) {
             if crate::net::Cidr::parse(cidr).is_none() {
                 errs.push(format!("invalid CIDR in allowlist: {cidr:?}"));
@@ -2512,6 +2547,19 @@ cleanup = [
         assert!(c.validate().is_empty(), "{:?}", c.validate());
         assert!(c.memory.enabled);
         assert_eq!(c.memory.swap_storm.sustain, secs(60));
+    }
+
+    #[test]
+    fn firewall_names_and_prefix_are_validated() {
+        let errs = |t: &str| toml::from_str::<Config>(t).unwrap().validate();
+        assert!(errs("[actions.firewall]\nipv6_prefix = 56").is_empty());
+        assert!(errs("[actions.firewall]\nipv6_prefix = 128").is_empty());
+        assert!(errs("[actions.firewall]\nipv6_prefix = 32").iter().any(|e| e.contains("ipv6_prefix")));
+        assert!(errs("[actions.firewall]\nipv6_prefix = 129").iter().any(|e| e.contains("ipv6_prefix")));
+        // the names go into nft scripts
+        assert!(errs("[actions.firewall]\ntable = 'warden; flush ruleset'").iter().any(|e| e.contains("table")));
+        assert!(errs("[actions.firewall]\nset_v6 = 'blocklist4'").iter().any(|e| e.contains("must differ")));
+        assert!(errs("[actions.firewall]\ntable = 'my_warden2'").is_empty());
     }
 
     #[test]

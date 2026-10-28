@@ -23,7 +23,7 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use warden_core::config::WafConfig;
-use warden_core::net::{IpSet, canonical};
+use warden_core::net::{IpSet, Key, canonical};
 use warden_core::ratelimit::{Cooldown, KeyedWindow, evict_lowest};
 use warden_core::{ActionSpec, Event, Severity, Subject};
 
@@ -466,7 +466,8 @@ impl NativeParser {
     }
 }
 
-/// Recent WAF activity per IP, shared with the FIM correlator.
+/// Recent WAF activity per peer ([`Key`]: an address, an IPv6 network),
+/// shared with the FIM correlator.
 #[derive(Debug, Clone, Copy)]
 struct RecentEntry {
     count: u32,
@@ -485,14 +486,15 @@ const RECENT_TTL: Duration = Duration::from_secs(3600);
 
 #[derive(Debug)]
 struct RecentMap {
-    map: HashMap<IpAddr, RecentEntry>,
+    map: HashMap<Key, RecentEntry>,
     gc_at: usize,
     evicted: u64,
+    ipv6_prefix: u8,
 }
 
 impl Default for RecentMap {
     fn default() -> Self {
-        Self { map: HashMap::new(), gc_at: 4096, evicted: 0 }
+        Self { map: HashMap::new(), gc_at: 4096, evicted: 0, ipv6_prefix: warden_core::net::DEFAULT_IPV6_PREFIX }
     }
 }
 
@@ -507,13 +509,24 @@ pub struct WafRecent {
 }
 
 impl WafRecent {
+    /// Count IPv6 addresses by the network of `prefix` bits
+    /// (`actions.firewall.ipv6_prefix`); a change starts over.
+    pub fn set_ipv6_prefix(&self, prefix: u8) {
+        let mut r = lock(&self.inner);
+        if r.ipv6_prefix != prefix {
+            r.ipv6_prefix = prefix;
+            r.map.clear();
+        }
+    }
+
     pub fn record(&self, ip: IpAddr, rules: &[String]) {
         self.record_at(ip, rules, Instant::now());
     }
 
     pub fn record_at(&self, ip: IpAddr, rules: &[String], now: Instant) {
         let mut r = lock(&self.inner);
-        let e = r.map.entry(ip).or_insert(RecentEntry { count: 0, last: now, rules: [0; RECENT_RULES], n_rules: 0 });
+        let key = Key::of(ip, r.ipv6_prefix);
+        let e = r.map.entry(key).or_insert(RecentEntry { count: 0, last: now, rules: [0; RECENT_RULES], n_rules: 0 });
         e.count = e.count.saturating_add(1);
         e.last = now;
         for id in rules.iter().filter_map(|r| r.parse::<u32>().ok()) {
@@ -533,12 +546,12 @@ impl WafRecent {
         }
     }
 
-    /// WAF hits for an IP within the last hour.
+    /// WAF hits for an address (its network, for IPv6) within the last hour.
     pub fn hits(&self, ip: &str) -> Option<(u32, Vec<String>)> {
         let ip: IpAddr = canonical(ip.parse().ok()?);
         let r = lock(&self.inner);
         r.map
-            .get(&ip)
+            .get(&Key::of(ip, r.ipv6_prefix))
             .filter(|v| v.last.elapsed() < RECENT_TTL)
             .map(|v| (v.count, v.rules[..usize::from(v.n_rules)].iter().map(u32::to_string).collect()))
     }
@@ -556,13 +569,16 @@ pub struct WafTracker {
     min_sev: u8,
     ignore: HashSet<String>,
     allow: IpSet,
-    window: KeyedWindow<IpAddr>,
+    /// Counted per [`Key`]: one IPv6 attacker is one /64, however many
+    /// addresses he sends from (N25).
+    window: KeyedWindow<Key>,
     /// Transactions already counted, by a keyed hash of address and
     /// unique id (8 bytes instead of a formatted string per transaction).
     seen: Cooldown<u64>,
     seen_hasher: std::collections::hash_map::RandomState,
-    noted: Cooldown<IpAddr>,
-    blocked: Cooldown<IpAddr>,
+    noted: Cooldown<Key>,
+    blocked: Cooldown<Key>,
+    ipv6_prefix: u8,
 }
 
 /// One transaction yields several error-log lines (one per matched rule),
@@ -589,8 +605,16 @@ impl WafTracker {
             seen_hasher: std::collections::hash_map::RandomState::new(),
             noted: Cooldown::with_capacity(Duration::from_secs(60), NOTED_CAP),
             blocked: Cooldown::new(cfg.block_ttl.max(Duration::from_secs(60))),
+            ipv6_prefix: warden_core::net::DEFAULT_IPV6_PREFIX,
             cfg: cfg.clone(),
         }
+    }
+
+    /// Count IPv6 clients by the network of `prefix` bits
+    /// (`actions.firewall.ipv6_prefix`).
+    pub fn with_ipv6_prefix(mut self, prefix: u8) -> Self {
+        self.ipv6_prefix = prefix;
+        self
     }
 
     /// Entries forgotten because a table was full: (dedup, counting window).
@@ -629,10 +653,12 @@ impl WafTracker {
             return Vec::new();
         }
         recent.record_at(ip, &hit.rule_ids, now);
-        let n = self.window.add(ip, now);
+        let key = Key::of(ip, self.ipv6_prefix);
+        let n = self.window.add(key, now);
         let mut out = Vec::new();
         let summary = hit.summary().map(str::to_owned).unwrap_or_else(|| format!("rules {}", hit.rule_ids.join(",")));
-        if self.noted.ready(&ip, now) {
+        // one note per peer and minute: an IPv6 flood is one peer per /64
+        if self.noted.ready(&key, now) {
             let mut ev = Event::new(
                 "waf.hit",
                 Severity::Info,
@@ -643,10 +669,13 @@ impl WafTracker {
                 ),
             )
             .subject(Subject::Ip { addr: ip })
-            .fingerprint(format!("waf.hit:{ip}"))
+            .fingerprint(format!("waf.hit:{key}"))
             .detail("ip", ip.to_string())
             .detail("rules", hit.rule_ids.clone())
             .detail("count_in_window", n);
+            if key.is_network() {
+                ev = ev.detail("prefix", key.to_string());
+            }
             if let Some(s) = site {
                 ev = ev.detail("site", s);
             }
@@ -655,24 +684,28 @@ impl WafTracker {
             }
             out.push(ev);
         }
-        if n >= self.cfg.block_after && self.blocked.ready(&ip, now) {
-            self.window.reset(&ip);
+        if n >= self.cfg.block_after && self.blocked.ready(&key, now) {
+            self.window.reset(&key);
             let allowlisted = self.allow.contains(&ip);
             let mut ev = Event::new(
                 "security.waf_attack",
                 Severity::Warning,
                 format!(
-                    "{ip}: {n} requests blocked by ModSecurity within {}s — persistent attacker",
+                    "{key}: {n} requests blocked by ModSecurity within {}s — persistent attacker",
                     self.cfg.window.as_secs()
                 ),
             )
+            // the last address; the responder blocks its network (`prefix`)
             .subject(Subject::Ip { addr: ip })
-            .fingerprint(format!("security.waf_attack:{ip}"))
+            .fingerprint(format!("security.waf_attack:{key}"))
             .detail("ip", ip.to_string())
             .detail("blocked_requests", n)
             .detail("last_rules", hit.rule_ids.clone())
             .detail("last_messages", hit.messages.clone())
             .detail("last_uri", hit.uri.clone().unwrap_or_default());
+            if key.is_network() {
+                ev = ev.detail("prefix", key.to_string());
+            }
             if let Some(s) = site {
                 ev = ev.detail("site", s);
             }
@@ -710,7 +743,7 @@ pub fn run_waf(shared: &Arc<Shared>, sink: &Sink) -> Result<(), String> {
     }
     let generation = shared.generation();
     let allow: Vec<String> = cfg.actions.firewall.allowlist.iter().chain(&cfg.auth.allowlist).cloned().collect();
-    let mut tracker = WafTracker::new(&cfg.waf, &allow);
+    let mut tracker = WafTracker::new(&cfg.waf, &allow).with_ipv6_prefix(cfg.actions.firewall.ipv6_prefix);
     let web = crate::util::WebPrincipals::load(&cfg.process.web_users);
     let mut sources = Sources::new();
     let mut discovered: Vec<warden_core::config::WafLog> = Vec::new();
@@ -1030,6 +1063,51 @@ mod tests {
         assert!(held.details.contains_key(warden_core::event::IP_BLOCK_OFF));
     }
 
+    /// N25: an attacker rotating through one /64 — a new address for every
+    /// request — is one peer: counted, reported and blocked as the /64.
+    /// IPv4 addresses stay apart.
+    #[test]
+    fn an_ipv6_attacker_rotating_addresses_is_counted_by_network() {
+        let cfg = WafConfig { block_after: 5, ..Default::default() };
+        let mut t = WafTracker::new(&cfg, &[]);
+        let recent = WafRecent::default();
+        let now = Instant::now();
+        let mut out = Vec::new();
+        for i in 0..20u16 {
+            let mut h = parse_error_line(APACHE).unwrap();
+            h.ip = Some(IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 0xaa, 1, i, 0, 0, i + 1)));
+            h.unique_id = Some(format!("v6-{i}"));
+            out.extend(t.on_hit(h, Some("main"), None, &recent, now + Duration::from_millis(u64::from(i))));
+        }
+        let attacks: Vec<&Event> = out.iter().filter(|e| e.kind == "security.waf_attack").collect();
+        assert_eq!(attacks.len(), 1, "one /64, one attacker: {:?}", out.iter().map(|e| &e.title).collect::<Vec<_>>());
+        assert_eq!(attacks[0].details["prefix"], "2001:db8:aa:1::/64");
+        assert_eq!(attacks[0].fingerprint, "security.waf_attack:2001:db8:aa:1::/64");
+        assert!(matches!(attacks[0].actions[..], [ActionSpec::BlockIp { .. }]));
+        assert_eq!(out.iter().filter(|e| e.kind == "waf.hit").count(), 1, "one note per peer and minute");
+        assert_eq!(recent.hits("2001:db8:aa:1::ffff").unwrap().0, 20, "the FIM sees the network's history");
+        // per address (ipv6_prefix = 128): twenty one-off peers, no block
+        let mut t = WafTracker::new(&cfg, &[]).with_ipv6_prefix(128);
+        let mut blocks = 0;
+        for i in 0..20u16 {
+            let mut h = parse_error_line(APACHE).unwrap();
+            h.ip = Some(IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 0xaa, 1, i, 0, 0, i + 1)));
+            h.unique_id = Some(format!("p-{i}"));
+            blocks += t.on_hit(h, None, None, &recent, now).iter().filter(|e| e.kind == "security.waf_attack").count();
+        }
+        assert_eq!(blocks, 0);
+        // IPv4 neighbours are different peers
+        let mut t = WafTracker::new(&cfg, &[]);
+        let mut blocks = 0;
+        for i in 0..20u8 {
+            let mut h = parse_error_line(APACHE).unwrap();
+            h.ip = Some(IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, i)));
+            h.unique_id = Some(format!("v4-{i}"));
+            blocks += t.on_hit(h, None, None, &recent, now).iter().filter(|e| e.kind == "security.waf_attack").count();
+        }
+        assert_eq!(blocks, 0);
+    }
+
     /// N2/N3: 120 000 distinct attackers. The recent table stays bounded
     /// and recording stays cheap (0.14.1 scanned the whole table, with a
     /// clock read per entry, for every new address past 50 000).
@@ -1039,15 +1117,15 @@ mod tests {
         let t0 = Instant::now();
         let rules = vec!["942100".to_owned(), "949110".to_owned()];
         let started = std::time::Instant::now();
+        // one per /64: distinct peers (addresses of one /64 are one peer)
+        let peer = |i: u32| IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, (i >> 16) as u16, i as u16, 0, 0, 0, 1));
         for i in 0..120_000u32 {
-            let ip = IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, (i >> 16) as u16, i as u16));
-            r.record_at(ip, &rules, t0 + Duration::from_micros(u64::from(i)));
+            r.record_at(peer(i), &rules, t0 + Duration::from_micros(u64::from(i)));
         }
         let (n, evicted) = r.stats();
         assert!(n <= RECENT_CAP, "{n}");
         assert!(evicted >= 70_000);
         assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
-        let last = IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 1, (119_999u32 & 0xffff) as u16));
-        assert!(r.hits(&last.to_string()).is_some(), "the newest are kept");
+        assert!(r.hits(&peer(119_999).to_string()).is_some(), "the newest are kept");
     }
 }

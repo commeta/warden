@@ -1,5 +1,124 @@
 # Changelog
 
+## 0.14.3
+
+Stage A of the 0.14.2 review (docs/reviews/review-0.14.2.ru.md): the two P1
+defects of the response path, a slow test, the journal flood, the Lab Kit.
+No configuration change is needed. New, both optional:
+`actions.firewall.ipv6_prefix` (64) and `events.max_info_per_minute` (600).
+The nftables table gains a third set, `blocklist6_64`, created by the daemon.
+
+### Security
+- **A storm of blocks delayed and could lose a kill** (N23). Blocks and
+  containment shared one executor thread, and every block was its own `nft`
+  process: under 400 new attacking addresses a second a kill waited
+  2.5–3.1 s behind them, and a full queue dropped whatever came next. The
+  executor now has three lanes: **contain** (kill, stop, throttle, freeze or
+  kill a cgroup, quarantine) with a priority queue that sheds low-priority
+  work first, **network** with a thread of its own that batches blocks — up
+  to 512 addresses or 100 ms into one `nft -f -` transaction, duplicates of
+  one target merged — and **slow** (unit restarts and limits, cleanups,
+  sysctl, `exec` hooks). Work lost on a full queue is reported as
+  `warden.queue_overflow` (critical when containment was lost; the first
+  loss at once, later ones summed up once a minute) and counted in
+  `warden_queue_dropped_total{queue}`. Measured with `bench/stress.py` on
+  the review VM (2 vCPU): a kill now waits 1–2 ms in a block storm, a
+  victim lives the 2 s of its detection and no longer 3.7–5.1 s; 10 000
+  blocks take 1.5 s in 20 transactions; near `max_blocked` (45 000
+  entries) a block costs 0.2 ms of nft time and waits at most the 100 ms
+  of batching (p90 106 ms).
+- **An IPv6 attacker was never blocked** (N25). Every table was keyed by
+  the full address: an attacker rotating through his /64 — any IPv6 host
+  has 2^64 addresses — stayed below every threshold (4 000 addresses × 4
+  requests: 16 000 ModSecurity denials, no block). The WAF counters, SSH
+  failure windows, heuristic scores and the FIM's blocked clients are now
+  kept per **peer**: an IPv4 address, or an IPv6 network of
+  `actions.firewall.ipv6_prefix` bits (64 by default, per RFC 6177; 48–128,
+  128 restores per-address behaviour). IPv4 is not aggregated (CGNAT). A
+  network is blocked in its own set (`blocklist6_64`, matched by
+  `ip6 saddr & ffff:ffff:ffff:ffff:: @blocklist6_64`). A block never takes
+  an administrator with it: a network holding an allow-listed address, or
+  the address of another established SSH session, is narrowed to the one
+  address (a manual `wardenctl block` of such a network is refused). Events
+  name the peer (`2001:db8:aa:1::/64: …`) and carry `details.prefix` next
+  to `details.ip`. Measured: 6 005 addresses of one /64 give one
+  `security.waf_attack` and one block of the /64; the IPv4 control is
+  unchanged.
+
+### Changed
+- **The blocklist is counted, not listed.** The size check against
+  `max_blocked` uses a count kept in memory and reconciled with nft once a
+  minute (`warden_blocklist_entries`); a table removed behind Warden's back
+  (`nft flush ruleset`) is noticed there or at the next block and
+  recreated. The sets are plain timeout hash sets: an interval set would
+  make every nft call read all of its elements (0.33 s per call at 45 000).
+  Network sets of an earlier `ipv6_prefix` keep their rule until their
+  entries expire, then are removed.
+- `wardenctl block` and `unblock` take an address or an IPv6 network of
+  `ipv6_prefix` bits (`2001:db8:aa:1::/64`); a manual block of an address
+  blocks that address only. Unblocking an IPv6 address also lifts the block
+  of its network; `wardenctl blocklist` shows networks with their prefix.
+- **The journal is not flooded by informational events** (N33, first
+  part). A WAF flood wrote 64 MB of `waf.hit` a minute in the 0.14.2
+  review, and rotation erased the incident it was about. Past
+  `events.max_info_per_minute` (600) events of one informational kind a
+  minute are scored, correlated and acted on but not journaled; a
+  `warden.journal_suppressed` notice a minute says how many of each kind
+  (`warden_journal_suppressed_total{kind}`). Informational events go to
+  the daemon's own log (stdout, the systemd journal) at debug level, not
+  info.
+- `actions.firewall` names are validated: `table`, `set_v4` and `set_v6`
+  must be nftables identifiers (`[A-Za-z_][A-Za-z0-9_]*`, at most 48) and
+  the two sets must differ — they are written into an nft script.
+- A firewall reconfiguration (reload) keeps the count and the table, and
+  recreates the ruleset only when the table, the sets or `ipv6_prefix`
+  changed.
+- The firewall is behind a trait (`warden_respond::firewall::Backend`):
+  the engine is tested with a fake nft — a storm of 10 000 blocks at 10 ms
+  per call must not hold up a kill.
+- New metrics: `warden_firewall_batches_total`,
+  `warden_firewall_batched_blocks_total`,
+  `warden_firewall_batch_seconds_total`,
+  `warden_queue_length{queue=contain|network}`, `warden_blocklist_entries`,
+  `warden_journal_suppressed_total{kind}`.
+
+### Tests
+- `warden-sys` took 783 s on the lab VM under I/O load (T1): the `du`
+  fixtures were `fsync`ed file by file, and even without that every
+  `mkdir` waited for the journal commit of another writer's `fsync`. They
+  are no longer synced and are built on tmpfs (`/dev/shm`) when it has
+  room: next to two `fsync`ing writers the crate's 94 tests take 6 s
+  (0.14.2: 160 s on the same VM). The Lab Kit runs the tests with
+  `TMPDIR` in its build area, off `/opt`.
+- `bench/stress.py`: the hostile scenarios of the review — unique and
+  rotating IPv6 WAF floods, a block storm with containment, a burst of
+  10 000 blocks, blocks near `max_blocked`, an exec storm, auth floods —
+  with the numbers stage A was accepted on.
+
+### Lab Kit
+- `guest/70-warden-lab-source-tests.sh --source DIR` (or
+  `WARDEN_SOURCE_DIR`) tests a source tree already on the lab machine
+  instead of downloading a GitHub archive: the tree is checked
+  (`Cargo.toml` with `[workspace]`, `Cargo.lock`, `crates/wardend`),
+  copied with `rsync` without `target/` and `.git/`, and the log records
+  its commit (when it is a git checkout) and a SHA-256 of the tree. The
+  build goes to `WARDEN_LAB_BUILD_ROOT` (`/var/tmp/warden-lab-build`), off
+  `/opt`, with at least `WARDEN_LAB_MIN_FREE_GIB` (6) free; `target/` is
+  removed afterwards unless `WARDEN_LAB_KEEP_TARGET=YES` (L1).
+- `lab.env` names the Warden release and its SHA-256 itself — the kit no
+  longer carries a hard-coded 0.14.x; an all-zero hash is refused with a
+  hint. `guest/20-install-warden.sh` installs a locally built package with
+  `WARDEN_DEB_FILE` and `WARDEN_DEB_FILE_SHA256` (L2).
+- `20-install-warden.sh` removes the `warden-lab-modsecurity` logrotate
+  entry left by earlier kits, checks logrotate and clears its failed state
+  (L8).
+- The active block test only accepts evidence of its own run: events after
+  the journal position it started at, about `127.0.0.2`, and that exact
+  address in `blocklist4` (L3: an old `waf_attack` of any address used to
+  pass). The WAF smoke tests count only audit records with their run tag.
+- The documentation describes the current kit and Warden 0.14.3: three
+  sets, the source test run, the local package.
+
 ## 0.14.2
 
 Stage 0 of the 0.14.1 review (docs/reviews/review-0.14.1.ru.md): the P1

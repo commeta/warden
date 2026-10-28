@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use warden_core::config::{AuthConfig, AuthSource};
-use warden_core::net::IpSet;
+use warden_core::net::{IpSet, Key};
 use warden_core::ratelimit::KeyedWindow;
 use warden_core::{ActionSpec, Event, Severity, Subject};
 
@@ -82,10 +82,13 @@ pub struct AuthAnalyzer {
     p: Patterns,
     web_users: HashSet<String>,
     allow: IpSet,
-    failures: KeyedWindow<IpAddr>,
-    users_tried: HashMap<IpAddr, BTreeSet<String>>,
-    /// IPs that recently failed (for "success after brute force").
-    recent_fail: HashMap<IpAddr, (Instant, usize)>,
+    /// Per [`Key`]: a brute force spread over the addresses of one IPv6 /64
+    /// is one source (N25).
+    failures: KeyedWindow<Key>,
+    users_tried: HashMap<Key, BTreeSet<String>>,
+    /// Sources that recently failed (for "success after brute force").
+    recent_fail: HashMap<Key, (Instant, usize)>,
+    ipv6_prefix: u8,
 }
 
 impl AuthAnalyzer {
@@ -99,7 +102,15 @@ impl AuthAnalyzer {
             allow: IpSet::new(&allow_list),
             users_tried: HashMap::new(),
             recent_fail: HashMap::new(),
+            ipv6_prefix: warden_core::net::DEFAULT_IPV6_PREFIX,
         }
+    }
+
+    /// Count IPv6 sources by the network of `prefix` bits
+    /// (`actions.firewall.ipv6_prefix`).
+    pub fn with_ipv6_prefix(mut self, prefix: u8) -> Self {
+        self.ipv6_prefix = prefix;
+        self
     }
 
     /// Split a classic syslog line into (identifier, message).
@@ -126,11 +137,12 @@ impl AuthAnalyzer {
     fn ssh_failure(&mut self, ip: &str, user: &str, now: Instant) -> Vec<Event> {
         let Ok(ip) = ip.parse::<IpAddr>() else { return vec![] };
         let ip = warden_core::net::canonical(ip);
+        let key = Key::of(ip, self.ipv6_prefix);
         self.housekeeping(now);
-        let n = self.failures.add(ip, now);
-        let e = self.recent_fail.entry(ip).or_insert((now, 0));
+        let n = self.failures.add(key, now);
+        let e = self.recent_fail.entry(key).or_insert((now, 0));
         *e = (now, e.1 + 1);
-        let tried = self.users_tried.entry(ip).or_default();
+        let tried = self.users_tried.entry(key).or_default();
         if tried.len() < MAX_USERS_PER_SOURCE {
             // the name is the client's: keep a bounded prefix
             tried.insert(user.chars().take(MAX_USER_CHARS).collect());
@@ -138,19 +150,23 @@ impl AuthAnalyzer {
         if n < self.cfg.ssh_max_failures {
             return vec![];
         }
-        self.failures.reset(&ip);
-        let users: Vec<String> = self.users_tried.remove(&ip).unwrap_or_default().into_iter().collect();
+        self.failures.reset(&key);
+        let users: Vec<String> = self.users_tried.remove(&key).unwrap_or_default().into_iter().collect();
         let allowlisted = self.allow.contains(&ip);
         let mut ev = Event::new(
             "security.ssh_bruteforce",
             Severity::Warning,
-            format!("SSH brute force from {ip}: {n} failures within {}s", self.cfg.ssh_window.as_secs()),
+            format!("SSH brute force from {key}: {n} failures within {}s", self.cfg.ssh_window.as_secs()),
         )
+        // the last address; the responder blocks its network (`prefix`)
         .subject(Subject::Ip { addr: ip })
-        .fingerprint(format!("security.ssh_bruteforce:{ip}"))
+        .fingerprint(format!("security.ssh_bruteforce:{key}"))
         .detail("failures", n)
         .detail("users_tried", users)
         .detail("ip", ip.to_string());
+        if key.is_network() {
+            ev = ev.detail("prefix", key.to_string());
+        }
         if allowlisted {
             ev = ev.detail("allowlisted", true);
         } else if self.cfg.ssh_block {
@@ -179,9 +195,10 @@ impl AuthAnalyzer {
                     let Ok(ip) = c["ip"].parse::<IpAddr>() else { return vec![] };
                     let ip = warden_core::net::canonical(ip);
                     let mut out = Vec::new();
+                    // failures from anywhere in the address's network count
                     let prior = self
                         .recent_fail
-                        .get(&ip)
+                        .get(&Key::of(ip, self.ipv6_prefix))
                         .filter(|(t, _)| now.saturating_duration_since(*t) < Duration::from_secs(3600))
                         .map(|x| x.1)
                         .unwrap_or(0);
@@ -401,7 +418,8 @@ pub fn run_auth(shared: &Arc<Shared>, sink: &Sink) -> Result<(), String> {
         return Ok(());
     }
     let generation = shared.generation();
-    let mut an = AuthAnalyzer::new(&cfg.auth, &cfg.process.web_users, &cfg.actions.firewall.allowlist);
+    let mut an = AuthAnalyzer::new(&cfg.auth, &cfg.process.web_users, &cfg.actions.firewall.allowlist)
+        .with_ipv6_prefix(cfg.actions.firewall.ipv6_prefix);
     let use_journal = match cfg.auth.source {
         AuthSource::Journal => true,
         AuthSource::File => false,
@@ -587,7 +605,10 @@ mod tests {
         assert_eq!(out.len(), 1, "three failures from one real source: {out:?}");
         assert_eq!(out[0].details["ip"], "203.0.113.7");
         assert!(matches!(&out[0].subject, Subject::Ip { addr } if addr.to_string() == "203.0.113.7"));
-        assert!(a.failures.add("192.0.2.50".parse().unwrap(), now) == 1, "the named address was never charged");
+        assert!(
+            a.failures.add(Key::exact("192.0.2.50".parse().unwrap()), now) == 1,
+            "the named address was never charged"
+        );
     }
 
     #[test]
@@ -616,15 +637,50 @@ mod tests {
         let mut a = an();
         let now = Instant::now();
         for i in 0..(MAX_TRACKED_SOURCES as u32 * 2 + 10) {
-            let ip = format!("2001:db8::{:x}:{:x}", i >> 16, i & 0xffff);
+            // one per /64: distinct sources
+            let ip = format!("2001:db8:{:x}:{:x}::1", i >> 16, i & 0xffff);
             a.analyze("sshd", &format!("Failed password for root from {ip} port 1 ssh2"), now);
         }
         assert!(a.recent_fail.len() <= MAX_TRACKED_SOURCES + 1, "{}", a.recent_fail.len());
         assert!(a.users_tried.len() <= MAX_TRACKED_SOURCES + 1, "{}", a.users_tried.len());
         let long = "u".repeat(5000);
         a.analyze("sshd", &format!("Failed password for {long} from 198.51.100.77 port 1 ssh2"), now);
-        let tried = &a.users_tried[&"198.51.100.77".parse::<IpAddr>().unwrap()];
+        let tried = &a.users_tried[&Key::exact("198.51.100.77".parse::<IpAddr>().unwrap())];
         assert!(tried.iter().all(|u| u.chars().count() <= MAX_USER_CHARS));
+    }
+
+    /// N25: a brute force from the addresses of one IPv6 /64 — one failure
+    /// each — is one source, and a login from the /64 afterwards is a
+    /// success after brute force.
+    #[test]
+    fn a_brute_force_spread_over_a_network_is_one_source() {
+        let mut a = an();
+        let now = Instant::now();
+        let mut out = Vec::new();
+        for i in 1..=3 {
+            out.extend(a.analyze(
+                "sshd",
+                &format!("Failed password for root from 2001:db8:aa:1::{i} port 1 ssh2"),
+                now,
+            ));
+        }
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].details["prefix"], "2001:db8:aa:1::/64");
+        assert_eq!(out[0].details["ip"], "2001:db8:aa:1::3");
+        assert!(matches!(out[0].actions[..], [ActionSpec::BlockIp { .. }]));
+        let v = a.analyze("sshd", "Accepted password for deploy from 2001:db8:aa:1::99 port 2 ssh2", now);
+        assert!(v.iter().any(|e| e.kind == "security.bruteforce_success"), "{v:?}");
+        // per address: three one-off sources
+        let mut a = an().with_ipv6_prefix(128);
+        let mut out = Vec::new();
+        for i in 1..=3 {
+            out.extend(a.analyze(
+                "sshd",
+                &format!("Failed password for root from 2001:db8:aa:1::{i} port 1 ssh2"),
+                now,
+            ));
+        }
+        assert!(out.is_empty());
     }
 
     #[test]

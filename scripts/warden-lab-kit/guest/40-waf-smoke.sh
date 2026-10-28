@@ -14,14 +14,16 @@ probe() {
   [[ "$code" == "$expected" ]]
 }
 failed=0
+# this run's tag: the audit-log check finds these requests, not older ones (L3)
+TAG="ws$(date +%s%N)"
 probe health "$BASE/health.php" 200 || failed=1
 probe https-health "https://${LAB_IP}/health.php" 200 || failed=1
-probe xss "$BASE/xss.php?q=%3Cscript%3Ealert(1)%3C/script%3E" 403 || failed=1
-probe sqli "$BASE/sqli.php?id=1%20OR%201=1" 403 || failed=1
-probe traversal "$BASE/traversal.php?file=../../../../../etc/passwd" 403 || failed=1
+probe xss "$BASE/xss.php?q=%3Cscript%3Ealert(1)%3C/script%3E&wlt=${TAG}" 403 || failed=1
+probe sqli "$BASE/sqli.php?id=1%20OR%201=1&wlt=${TAG}" 403 || failed=1
+probe traversal "$BASE/traversal.php?file=../../../../../etc/passwd&wlt=${TAG}" 403 || failed=1
 # Five distinct ModSecurity-denied transactions cross Warden's block_after threshold.
-probe xss-repeat "$BASE/xss.php?q=%3Cscript%3Ealert(2)%3C/script%3E" 403 || failed=1
-probe sqli-repeat "$BASE/sqli.php?id=2%20OR%201=1" 403 || failed=1
+probe xss-repeat "$BASE/xss.php?q=%3Cscript%3Ealert(2)%3C/script%3E&wlt=${TAG}" 403 || failed=1
+probe sqli-repeat "$BASE/sqli.php?id=2%20OR%201=1&wlt=${TAG}" 403 || failed=1
 if (( failed )); then
   cat >&2 <<'HINT'
 WAF smoke test failed. Inspect services/configuration:
@@ -32,6 +34,12 @@ WAF smoke test failed. Inspect services/configuration:
 HINT
   exit 1
 fi
-if [[ -r /var/log/apache2/modsec_audit.log ]] && ! grep -q -- '-A--' /var/log/apache2/modsec_audit.log; then echo 'No serial ModSecurity audit transaction found.' >&2; exit 1; fi
+if [[ -r /var/log/apache2/modsec_audit.log ]]; then
+  sleep 1
+  TAGGED="$(grep -cF -- "wlt=${TAG}" /var/log/apache2/modsec_audit.log || true)"
+  (( TAGGED >= 5 )) || { echo "Only ${TAGGED} of this run's 5 denied requests are in the audit log (tag ${TAG})." >&2; exit 1; }
+else
+  echo 'Note: /var/log/apache2/modsec_audit.log is not readable here (root:adm 0640); run with sudo to check it.'
+fi
 echo 'Local WAF smoke tests passed.'
 if command -v wardenctl >/dev/null && systemctl is-active --quiet wardend.service; then wardenctl events -n 30 || true; fi

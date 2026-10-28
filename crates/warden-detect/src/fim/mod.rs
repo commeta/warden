@@ -119,7 +119,9 @@ struct SiteState {
     /// a mass change kills only these.
     flagged_writers: VecDeque<(Instant, Writer)>,
     access_seq: u64,
-    blocked_ips: HashMap<std::net::IpAddr, Instant>,
+    /// Peers ([`warden_core::net::Key`]: an IPv6 /64 is one) whose block
+    /// was requested within the hour.
+    blocked_ips: HashMap<warden_core::net::Key, Instant>,
 }
 
 impl SiteState {
@@ -775,14 +777,16 @@ impl FimWorker {
                 continue;
             }
             let flagged: HashSet<String> = self.sites[idx].base.flagged.iter().map(|r| format!("/{r}")).collect();
+            let v6_prefix = self.shared.config().actions.firewall.ipv6_prefix;
             for r in reqs.into_iter().filter(|r| flagged.contains(&*r.path)) {
                 let real = warden_sys::clock::now();
                 let recent = |t: &Instant| real.saturating_duration_since(*t) < Duration::from_secs(3600);
-                if self.sites[idx].blocked_ips.get(&r.ip).is_some_and(recent) {
+                let peer = warden_core::net::Key::of(r.ip, v6_prefix);
+                if self.sites[idx].blocked_ips.get(&peer).is_some_and(recent) {
                     continue;
                 }
                 self.sites[idx].blocked_ips.retain(|_, t| recent(t));
-                self.sites[idx].blocked_ips.insert(r.ip, real);
+                self.sites[idx].blocked_ips.insert(peer, real);
                 let ip = r.ip;
                 let mut ev = Event::new(
                     "security.webshell_access",
@@ -794,6 +798,10 @@ impl FimWorker {
                 .detail("site", name.clone())
                 .detail("ip", r.ip.to_string())
                 .detail("path", &*r.path);
+                if peer.is_network() {
+                    // what a block takes: the address's network
+                    ev = ev.detail("prefix", peer.to_string());
+                }
                 if let Some(why) = &writable {
                     ev = ev.detail("log_trust", format!("writable by a web user: {why}"));
                 }

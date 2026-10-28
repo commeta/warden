@@ -4,6 +4,62 @@ Warden is meant to run on the smallest VPS next to the workload it guards.
 This page records what every module costs in CPU, I/O and memory, how that
 was measured, and how to measure it on your own host.
 
+## Results: 0.14.2 → 0.14.3 — the response path under attack
+
+Stage A of the 0.14.2 review rebuilt the path from a finding to a block or
+a kill ([architecture](architecture.md#threading-model)). Measured with
+[`bench/stress.py`](../bench/stress.py) — the hostile loads of the review —
+on the same 2-vCPU / 8 GiB VM (kernel 6.18), `--profile profiling` builds
+of both releases, enforcing mode with a real nft (the scenarios use a table
+of their own, `inet wbench`):
+
+| scenario | 0.14.2 | **0.14.3** |
+|---|---|---|
+| `block_storm`: 400 new WAF attackers/s for 40–60 s, a process to kill every 10 s (2 s of detection) | kill waited 2.48 s (p50), 3.08 s (max); victims lived 3.7–5.1 s; 2 358 jobs dropped from the full executor queue; 21.8 % of a core | kill waits **1 ms** (p50), **2 ms** (max); victims live **2.02 s**; **nothing dropped**; 10 000 blocks (the hourly budget) in 57 transactions, a block waits 89 ms (p50) / 193 ms (max); 12.3 % of a core |
+| `block_burst`: 10 000 attackers at once | not measured; at the ~250 blocks/s of `block_storm`, ~40 s | first to last block **1.54 s**, 20 transactions |
+| `block_near_cap`: 45 000 entries in the set, 50 new attackers/s | a block waited 92 ms (p50), 168 ms (p90) | **0.21 ms of nft time per block**; a block waits 104 ms (p50, the batching delay), 106 ms (p90) |
+| `waf_v6_spread`: 4 denials from each of 4 000–6 000 addresses of one /64, and an IPv4 control (5 per address) | **no block**, no `security.waf_attack` | **one** `security.waf_attack`, **one** block of `2001:db8:aa:1::/64`; IPv4 control unchanged (1 604 of 1 604 blocked per address) |
+| `waf_v6_unique`: 2 000 ModSecurity transactions/s for 60 s, each from a new /64 | 22 502 `waf.hit` journaled, 12.1 MB; 22.1 % of a core | **1 200** `waf.hit` journaled (600 a minute) and one `warden.journal_suppressed`, **0.67 MB**; 13.5 % of a core |
+| `victims_only`: kills without other load | kill 1 ms (p50) | 0 ms (p50), 1 ms (max) |
+
+Normal load did not change (`bench/profile.py`, dry-run; the same VM):
+
+| scenario | CPU at start, s | CPU steady, % of a core | RSS, MiB | cgroup peak, MiB |
+|---|---:|---:|---:|---:|
+| `idle` | 0.03 → 0.02 | 0.00 → 0.04 | 13.5 → 13.2 | 14 → 14 |
+| `process` (300 processes, 20 exec/s) | 0.29 → 0.28 | 0.49 → 0.47 | 15.5 → 15.3 | 18 → 18 |
+| `waf` (20 denials/s) | 0.07 → 0.05 | 0.50 → **0.18** ¹ | 15.3 → 15.6 | 16 → 16 |
+| `all` | 4.24 → 4.13 | 4.50 → 4.39 | 37.8 → 38.5 (peak 40.8 → 41.2) | 784 → 866 ² |
+
+¹ Informational events (`waf.hit`) go to the daemon's own log at debug
+level, no longer one line each on stdout. ² The SUID walk's dentry and
+inode slab, reclaimable (see [below](#page-cache-slab-and-memory-28g-in-systemctl-status));
+it varies from run to run by as much. The data: `bench/results/0.14.3`
+(`profile/*.json`, `stress.jsonl`).
+
+What changed:
+
+* **Three executor lanes.** Containment (kill, stop, throttle, freeze,
+  quarantine) has a thread and a priority queue of its own; `block_ip` jobs
+  go to the network lane, which takes them in batches of up to 512 (or
+  what arrived in 100 ms) and writes each batch as one `nft -f -`
+  transaction — a bad element is found by bisection and fails alone;
+  restarts, cleanups and hooks go to the slow lane. A kill no longer waits
+  for blocks, and blocks no longer wait for one `nft` process each.
+* **No listing per block.** The blocklist size is a count kept in memory
+  and reconciled with nft once a minute (`warden_blocklist_entries`). The
+  sets stay plain hash sets: an IPv6 network is stored as its network
+  address and matched through a mask; an interval set would make every
+  `nft` call read all of its elements (0.33 s at 45 000).
+* **Peers.** WAF, SSH, heuristic and FIM tables are keyed by an IPv4
+  address or an IPv6 /64, so rotating addresses no longer resets an
+  attacker's count.
+
+`warden_firewall_batches_total`, `warden_firewall_batched_blocks_total` and
+`warden_firewall_batch_seconds_total` give the batch size and the nft time
+per block on a live host; `warden_queue_length{queue}` and
+`warden_queue_dropped_total{queue}` show a lane falling behind.
+
 ## Results: 0.11.0 → 0.12.0
 
 Same VM and method as below. For the rows that changed, 0.11.0 was re-run
@@ -363,6 +419,33 @@ cargo build --profile profiling -p wardend
 sudo valgrind --tool=dhat --dhat-out-file=dhat.json target/profiling/wardend --config /etc/warden/warden.toml
 python3 bench/dhat_modules.py dhat.json
 ```
+
+### Hostile load (`bench/stress.py`)
+
+```
+cargo build --profile profiling -p wardend
+sudo python3 -I bench/stress.py --wardend target/profiling/wardend                 # every scenario, ≈ 10 min
+sudo python3 -I bench/stress.py --wardend target/profiling/wardend --only block_storm,waf_v6_spread
+```
+
+Run it on a disposable VM: the daemon runs in enforcing mode with a minimal
+configuration of its own, adds real nftables elements (to a table of its
+own, `inet wbench`, never `inet warden`) and kills the processes the
+scenario starts for it. Each scenario prints one JSON line — CPU, RSS,
+per-thread CPU, the delay of each lane (`lane_delay`, from the event's
+detection to its action result), what was dropped, the nft transactions —
+and the list is in the script's docstring with what stage A expected:
+
+| scenario | load |
+|---|---|
+| `waf_v6_unique` | 2 000 ModSecurity transactions/s, every one from a new IPv6 /64, 60 s |
+| `waf_v6_spread` | 4 denials from each address of one /64, plus an IPv4 control at 5 per address |
+| `block_storm` | 400 new attackers/s for 60 s and a process to kill every 10 s |
+| `block_burst` | 10 000 attackers written at once |
+| `block_near_cap` | 45 000 entries in the set before the run, 50 new attackers/s |
+| `victims_only` | the processes to kill, nothing else |
+| `exec_storm` | 400 `exec`/s from one parent for 60 s |
+| `auth_unique` | 2 000 auth.log lines/s, 400 new addresses/s |
 
 ## Page cache, slab and "Memory: 2.8G" in `systemctl status`
 

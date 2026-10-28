@@ -22,7 +22,7 @@ and in `WARDEN_EVENT_JSON`:
 | `subject` | what the event is about: `system`, `process`, `file`, `mount`, `unit`, `ip`, `user` or `cgroup`. Actions are resolved against it (`kill` kills the subject process, `block_ip` blocks the subject address, …) |
 | `source` | the detector that produced it |
 | `fingerprint` | de-duplication key: the same fingerprint inside the cooldown is reported once. Its first segment is the event's kind; a condition is reported as `kind[:detail]:<severity>` (`cpu.pressure:warning`, `disk.space:/:critical`, `process.cpu_hog:812:9731:warning`) and resolved as `kind[:detail]:resolved`. A resolution ends the episode of `X` and every `X:…`, so the condition coming back is reported again at once, and so is the next resolution. A notifier channel gets a resolution only if it got its condition |
-| `details` | structured facts (`exe`, `cmdline`, `parent`, `cgroup`, `ip`, …). `policy` lists the `[[policy]]` rules that matched; `ip_block_off` says why an event about an address does not block it (e.g. `"auth.ssh_block = false"`, `"policy office NAT"`) — the heuristics then do not block on it either; `actions_withheld` says why an event's actions were withheld on purpose (`"process.act_on_existing = false"`, `"policy #2 (alert_only)"`) — it still counts towards the process's suspicion score, but cannot make the heuristics contain it |
+| `details` | structured facts (`exe`, `cmdline`, `parent`, `cgroup`, `ip`, …). `ip` is the address an event is about, and `prefix` the IPv6 network a block of it takes (`2001:db8:aa:1::/64`, with `actions.firewall.ipv6_prefix` below 128); `policy` lists the `[[policy]]` rules that matched; `ip_block_off` says why an event about an address does not block it (e.g. `"auth.ssh_block = false"`, `"policy office NAT"`) — the heuristics then do not block on it either; `actions_withheld` says why an event's actions were withheld on purpose (`"process.act_on_existing = false"`, `"policy #2 (alert_only)"`) — it still counts towards the process's suspicion score, but cannot make the heuristics contain it |
 | `actions` | what the detector asked for; the outcome follows as `action.*` events |
 | `resolved` | `true` on the "back to normal" event of a condition |
 
@@ -81,7 +81,7 @@ how bad the condition is. Detectors are enabled in their `[section]` of
 
 | kind | severity | when |
 |---|---|---|
-| `memory.pressure` | warning → critical | PSI memory stall, low `MemAvailable` or swap use, sustained past `sustain`; names the culprit (RSS, its anonymous part, swap) and top cgroups. `kill_withheld` says why the kill was taken off (an ineffective kill earlier in the episode, `max_kills_per_episode` reached, or only PSI is high while memory is available — `io_bound` when the I/O stall is larger) |
+| `memory.pressure` | warning → critical | PSI memory stall, low `MemAvailable` or swap use, sustained past `sustain`; names the culprit (RSS, its anonymous part, swap) and top cgroups. `kill_withheld` says why the kill was taken off (an ineffective kill earlier in the episode, or `max_kills_per_episode` reached) |
 | `memory.swap_storm` | critical | sustained paging with high PSI full: the "server hangs, swaps" situation (same `kill_withheld`) |
 | `memory.kill_ineffective` | warning | a victim was killed, but MemAvailable rose by less than half of what it held (`expected`, `freed`): the memory is held elsewhere — `shmem` (tmpfs, shared memory), `slab_unreclaimable` — and kills stop until the episode ends; `hint` says where to look |
 | `memory.oom_kill` | warning | the kernel OOM killer fired (counter moved) |
@@ -94,10 +94,12 @@ how bad the condition is. Detectors are enabled in their `[section]` of
 | `process.uninterruptible` | warning | long D-state; resolved when the process leaves it |
 | `limits.process_fds` | warning | one process close to its `RLIMIT_NOFILE`; resolved when it is not |
 | `limits.file_handles`, `limits.pids`, `limits.conntrack` | warning → critical | a system-wide limit is nearly used up; `[tuning] auto_grow` may raise it |
-| `system.stall` | warning → critical; notice | Warden's own high-priority scheduler woke up late: the whole host was frozen (`cause = host`). On a VM, `hypervisor_steal` (steal time covers the delay) and `vm_paused` (no pressure inside the guest) are notices without a snapshot; `steal_seconds`, `psi_*` say why |
+| `system.stall` | warning → critical | Warden's own memory-locked scheduler thread woke up late: the whole host was frozen |
 | `system.clock_unsynchronized` | warning | for 15 minutes the clock is not synchronised (kernel flag or estimated error); `info` when it is again |
 | `warden.slow_detector` | notice | a detector took unusually long (its name and duration are in the title) |
 | `warden.worker_panic` | warning | a daemon thread (executor, notifier, sensor) panicked; it was restarted and the failing item skipped |
+| `warden.queue_overflow` | warning / critical | a queue of the executor or the notifier was full and work was lost: `dropped` (queue → event kind → count) and `total`. **critical** when containment (a kill, stop, quarantine) was lost. The first loss is reported at once, later ones summed up once a minute |
+| `warden.journal_suppressed` | notice | informational events of one kind over `events.max_info_per_minute` in the last minute were not journaled (they were still scored, notified and acted on): `suppressed` (kind → count), `total` |
 
 ## Disk
 
@@ -169,16 +171,16 @@ how bad the condition is. Detectors are enabled in their `[section]` of
 | `security.webshell` | warning → critical | signatures flagged a site file (score at or above `fim.alert_score`) |
 | `security.malicious_writer` | critical | the web worker that wrote a flagged file |
 | `security.webshell_access` | critical | a request hit a flagged file: someone is using the shell |
-| `security.waf_attack` | warning | one IP blocked by ModSecurity `block_after` times within `window` |
-| `security.waf_log_tampered` | warning | entries of a concurrent ModSecurity log changed after they were written: their MD5 is not the one in the index (`details.log`, `details.entries`); they are ignored — look for whoever can write the storage directory as the web user |
-| `waf.hit` | info | ModSecurity blocked a request (at most one event per IP per minute) |
+| `security.waf_attack` | warning | one peer — an address, or an IPv6 network (`prefix`) — blocked by ModSecurity `block_after` times within `window` |
+| `waf.hit` | info | ModSecurity blocked a request (at most one event per peer per minute: an address, an IPv6 /64) |
+| `security.waf_log_tampered` | warning | entries of a concurrent ModSecurity audit log no longer match the MD5 written into its index: someone who can write the storage directory rewrote them; they are ignored (`log`, `entries`, `log_trust`) |
 | `security.kernel_lockdown_violation` | warning | kernel lockdown refused something |
 | `security.kernel_module_loaded` | notice | a kernel module was loaded |
 | `security.lsm_disabled` | critical | AppArmor was disabled, or SELinux went permissive, at runtime |
 | `security.lsm_profiles_unloaded` | warning | the number of enforced AppArmor profiles dropped |
 | `heuristics.suspicious` | warning | accumulated suspicion score of a process crossed `alert_score`; `containment_withheld` when it also crossed `contain_score` on evidence whose actions were withheld (`actions_withheld`) |
 | `heuristics.contain` | critical | …crossed `contain_score`; carries `on_contain` |
-| `heuristics.ip_threshold` | warning | the same for a remote address |
+| `heuristics.ip_threshold` | warning | the same for a remote peer: an address, or an IPv6 network (`prefix`) — its addresses add up to one score |
 
 ## Authentication
 
@@ -189,8 +191,8 @@ and ignored. The `auth.log` file source cannot tell senders apart.
 
 | kind | severity | when |
 |---|---|---|
-| `security.ssh_bruteforce` | warning | repeated SSH failures from one address; blocks it with `block_ip` unless allow-listed |
-| `security.bruteforce_success` | critical | a login succeeded from an address after a burst of failures |
+| `security.ssh_bruteforce` | warning | repeated SSH failures from one peer (an address, or an IPv6 network: `prefix`); blocks it with `block_ip` unless allow-listed |
+| `security.bruteforce_success` | critical | a login succeeded from a peer (an address, an IPv6 network) after a burst of failures |
 | `auth.root_login` | warning | root logged in over SSH (`alert_root_login`) |
 | `auth.login` | info | an SSH login |
 | `auth.sudo` | info | a `sudo` command |
@@ -234,7 +236,10 @@ target or budget — or `failed`), `details.cause_id` / `cause_kind` / `cause`
 pointing at the event that asked for it and, for cleanups, `details.freed_bytes`.
 Severity follows the outcome: `warning` for a real change or a failure,
 `notice` for a dry run, a refusal or a cleanup that found nothing, `info`
-for a snapshot or a skip.
+for a snapshot or a skip. A `block_ip` result names what was blocked
+(`block_ip 2001:db8:aa:1::/64 → done: blocked 2001:db8:aa:1::/64 for 3600s`)
+and why only an address was when its network was narrowed; two requests
+for one target in the same batch are one block, the second `skipped`.
 
 `<name>` is one of `snapshot`, `kill`, `stop`, `freeze_cgroup`, `kill_cgroup`,
 `restart_unit`, `quarantine`, `block_ip`, `journal_vacuum`, `delete_old`,

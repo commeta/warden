@@ -192,12 +192,16 @@ impl ActionSpec {
         )
     }
 
-    /// Containment that must not wait behind a cleanup or a hook: it acts
-    /// on a live process, cgroup, file or address, and takes at most the
-    /// kill grace. An event with one of these goes to the urgent lane of the
-    /// executor (all kills are there, so two kills never race); everything
-    /// else (`systemctl restart`, `apt-get clean`, journal vacuum, file
-    /// cleanup, `exec` hooks, `limit_unit`, `sysctl`) to the slow lane.
+    /// Containment that must not wait behind a cleanup, a hook or a storm
+    /// of blocks: it acts on a live process, cgroup or file, and takes at
+    /// most the kill grace. An event with one of these goes to the
+    /// containment lane of the executor (all kills are there, so two kills
+    /// never race). `block_ip` steps go to the network lane, which batches
+    /// them ([`ActionSpec::is_block`]; in 0.14.2 they shared this lane and a
+    /// flood of attacker addresses held kills up for seconds — N23);
+    /// everything else (`systemctl restart`, `apt-get clean`, journal
+    /// vacuum, file cleanup, `exec` hooks, `limit_unit`, `sysctl`) to the
+    /// slow lane.
     pub fn is_urgent(&self) -> bool {
         matches!(
             self,
@@ -205,10 +209,14 @@ impl ActionSpec {
                 | ActionSpec::Stop
                 | ActionSpec::FreezeCgroup
                 | ActionSpec::KillCgroup
-                | ActionSpec::BlockIp { .. }
                 | ActionSpec::Quarantine
                 | ActionSpec::Throttle { .. }
         )
+    }
+
+    /// `block_ip`: the network lane.
+    pub fn is_block(&self) -> bool {
+        matches!(self, ActionSpec::BlockIp { .. })
     }
 
     /// Identity of this exact action for the per-target cooldown: its kind

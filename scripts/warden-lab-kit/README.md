@@ -18,6 +18,8 @@ nano lab.env
 
 По умолчанию `LAB_IP=127.0.0.1` используется для обычных проверок, а `ATTACKER_IP=127.0.0.2` — исключительно как отдельный локальный источник в явном тесте блокировки Warden. Не меняйте их без понимания механизма allowlist. `lab.env` не выполняется как shell-код; парсер отвергает повторяющиеся ключи и небезопасные строки. Сетевые интерфейсы и адреса не перенастраиваются.
 
+`WARDEN_VERSION` и `WARDEN_DEB_SHA256` — релиз Warden, который скачивает `guest/20-install-warden.sh`, и SHA-256 его пакета. Других значений по умолчанию у них нет: версия и хеш задаются только в `lab.env`. В `lab.env.example` стоит 0.14.3 с нулевым хешем — релиз ещё не закреплён, и скрипт откажется его скачивать, пока вы не впишете `sha256sum` пакета со страницы релиза. Свою сборку можно поставить без релиза (раздел 4).
+
 ## 2. Установить веб-стек и nftables
 
 ```bash
@@ -33,7 +35,7 @@ sudo ./guest/30-validate.sh
 - ModSecurity v2 с serial audit log `/var/log/apache2/modsec_audit.log` и OWASP CRS.
 - Нативный nftables: таблица `inet lab_filter` отбрасывает входящий трафик на порты `80,443,8080,3306` с любых интерфейсов, кроме `lo`. Таблица `inet warden` остаётся исключительно под управлением Warden. Скрипты меняют только принадлежащую им таблицу/цепочку и не используют глобальный `flush ruleset`.
 - DB-пароль: `/etc/warden-lab/db-password` (`root:root`, `0600`); PHP-конфигурация вне webroot `/etc/warden-lab/db.php` (`root:www-data`, `0640`); каталог `/etc/warden-lab` — `root:www-data`, `0710`.
-- Журнал ModSecurity ротируется, размер journald ограничивается для длительных прогонов.
+- Журнал аудита ModSecurity ротирует пакетный `/etc/logrotate.d/apache2` (вместе с остальными журналами Apache); комплект добавляет только ротацию `/var/log/warden-lab/php-error.log`. Размер journald ограничивается для длительных прогонов.
 
 Установщик специально не включает штатный `nftables.service`: системный `/etc/nftables.conf` может загрузить широкий ruleset. Вместо него применяется собственная `warden-lab-nftables.service`, которая поднимает только `inet lab_filter`. Если штатная служба уже активна/включена, скрипт останавливается для ручной проверки.
 
@@ -79,6 +81,21 @@ sudo wardenctl status
 sudo wardenctl events -f
 ```
 
+Скрипт скачивает `warden_<WARDEN_VERSION>-1_amd64.deb` с GitHub и сверяет его с `WARDEN_DEB_SHA256` из `lab.env`. Чтобы поставить пакет, собранный вами из исходников (ещё не выпущенная версия, исправление на проверке), передайте файл и его хеш в командной строке — `lab.env` при этом остаётся закреплённым за релизом:
+
+```bash
+# на машине сборки, обычным пользователем, в каталоге исходников:
+./scripts/build-deb.sh            # → target/debian/warden_0.14.3-1_amd64.deb
+sha256sum target/debian/warden_0.14.3-1_amd64.deb
+# на стенде:
+sudo env ACK_WARDEN_PRERELEASE_RISK=YES \
+     WARDEN_DEB_FILE=/home/warden/warden_0.14.3-1_amd64.deb \
+     WARDEN_DEB_FILE_SHA256=<хеш из sha256sum> \
+     ./guest/20-install-warden.sh
+```
+
+Файл копируется во временный каталог и проверяется уже копия: устанавливается ровно то, что сверено. Скрипт также удаляет `/etc/logrotate.d/warden-lab-modsecurity`, если он остался от ревизий комплекта до 0.14.2: эта запись дублировала ротацию Apache, и logrotate падал каждую ночь.
+
 Drop-in `/etc/warden/conf.d/60-warden-lab.toml` связывает Warden с FIM каталога сайта, Nginx access-log, ModSecurity audit log и health-check. `127.0.0.1` разрешён в allowlists для штатных проверок. `127.0.0.2` намеренно не входит в allowlist и зарезервирован только для отдельного активного теста. Основной `/etc/warden/warden.toml` остаётся в `dry_run = true`.
 
 **Не выключайте `dry_run` в начале тестов.** Сначала разберите ложные срабатывания и проверьте процедуру восстановления.
@@ -103,7 +120,9 @@ sudo wardenctl status
 sudo env ACK_WARDEN_ENFORCEMENT=YES ./guest/60-waf-block-test.sh
 ```
 
-Тест использует `curl --interface 127.0.0.2` для обращения к локальному Nginx на `127.0.0.1`. `RemoteIPInternalProxy 127.0.0.1` позволяет Apache получить клиентский адрес из заголовка доверенного локального reverse proxy. ModSecurity записывает адрес в audit log, после пяти заблокированных запросов Warden должен заблокировать source IP в `inet warden`. Тест требует сразу нескольких свидетельств: source `127.0.0.2` перестаёт получать HTTP-ответ, контрольный source `127.0.0.1` продолжает получать HTTP 200, в событиях есть `security.waf_attack` / `action.block_ip`, а IP присутствует в nftables blocklist.
+Тест использует `curl --interface 127.0.0.2` для обращения к локальному Nginx на `127.0.0.1`. `RemoteIPInternalProxy 127.0.0.1` позволяет Apache получить клиентский адрес из заголовка доверенного локального reverse proxy. ModSecurity записывает адрес в audit log, после пяти заблокированных запросов Warden должен заблокировать source IP в `inet warden`. Тест требует сразу нескольких свидетельств, и все они должны относиться к этому прогону и этому адресу: source `127.0.0.2` перестаёт получать HTTP-ответ, контрольный source `127.0.0.1` продолжает получать HTTP 200, после последнего события до начала теста появились `security.waf_attack` и `action.block_ip` со статусом `done` именно для `127.0.0.2`, а сам адрес (а не, например, `127.0.0.20`) есть в наборе `inet warden blocklist4`. Старые события и записи других адресов тест не засчитывает.
+
+IPv6 стенд пока не проверяет: все запросы идут по IPv4-loopback. Агрегацию IPv6 по /64 (0.14.3) проверяют модульные тесты и сценарий `waf_v6_spread` в `bench/stress.py`.
 
 **Сразу восстановите dry-run после теста:**
 
@@ -134,8 +153,9 @@ Apache запрещает выполнение скриптов в uploads, но
 ./tests/check-kit.sh
 sudo ./guest/30-validate.sh
 sudo nft list table inet lab_filter
-sudo nft list table inet warden  # может отсутствовать до первой активной блокировки
-sudo logrotate -d /etc/logrotate.d/warden-lab-modsecurity
+sudo nft list table inet warden  # может отсутствовать до первой активной блокировки;
+                                 # наборы blocklist4, blocklist6 и blocklist6_64 (сети IPv6 /64)
+sudo logrotate -d /etc/logrotate.d/apache2 /etc/logrotate.d/warden-lab-php
 sudo journalctl -u nginx -u apache2 -u mysql --since today
 sudo tail -F /var/log/nginx/access.log /var/log/nginx/error.log
 sudo tail -F /var/log/apache2/access.log /var/log/apache2/error.log /var/log/apache2/modsec_audit.log
@@ -145,7 +165,17 @@ sudo tail -F /var/log/warden/events.jsonl
 
 `tests/check-kit.sh` проверяет Bash/PHP, шаблоны конфигураций, формат `lab.env`, Warden TOML, loopback-binding и соответствие локальных тестов текущим файлам. Он не заменяет проверки работающих служб.
 
-## 7. Основные пути
+## 7. Тесты исходного кода Warden
+
+`guest/70-warden-lab-source-tests.sh` собирает Warden из исходников и запускает весь набор Rust-тестов от `root`; установленный пакет не заменяется. Исходники берутся из GitHub (`WARDEN_SOURCE_REF`, по умолчанию `main`) или — при ручном обновлении — из каталога на стенде:
+
+```bash
+sudo env ACK_WARDEN_LAB_SOURCE_TESTS=YES ./guest/70-warden-lab-source-tests.sh --source ~/warden-0.14.3
+```
+
+Каталог копируется в `/opt/warden-lab/source/local` без `target/` и `.git/` и сам не меняется; в журнал пишутся версия и SHA-256 всего дерева. Кэш Cargo, сборка и временные файлы тестов лежат в `WARDEN_LAB_BUILD_ROOT` (по умолчанию `/var/tmp/warden-lab-build`, лучше указать отдельный том), сборка удаляется после прогона. Подробно — `docs/warden-lab-source-tests.md`.
+
+## 8. Основные пути
 
 - Nginx: `/etc/nginx/sites-available/warden-lab`
 - Apache: `/etc/apache2/sites-available/warden-lab.conf`
@@ -156,5 +186,6 @@ sudo tail -F /var/log/warden/events.jsonl
 - DB secret: `/etc/warden-lab/db-password`; PHP config: `/etc/warden-lab/db.php`
 - Warden: `/etc/warden/warden.toml`, `/etc/warden/conf.d/60-warden-lab.toml`
 - Результаты длительного прогона: `results/*.csv`
+- Тесты исходников: журналы `/var/log/warden-lab/source-tests/`, копия исходников `/opt/warden-lab/source/`, сборка `WARDEN_LAB_BUILD_ROOT`
 
 Полное покрытие всех возможных инцидентов гарантировать нельзя. Используйте `docs/TEST-MATRIX.md` для фиксации триггера, ожидаемого события, сырого журнала и критерия приёмки каждого сценария.

@@ -91,11 +91,14 @@ PHPTEST
 fi
 
 printf '\n== HTTP/WAF local probes ==\n'
+# A tag of this run in every probe: the audit-log check below must find these
+# requests, not any record left by an earlier run (L3 of the 0.14.2 review).
+TAG="wl$(date +%s%N)"
 for spec in \
   'health|200|/health.php' \
-  'xss|403|/xss.php?q=%3Cscript%3Ealert(1)%3C/script%3E' \
-  'sqli|403|/sqli.php?id=1%20OR%201=1' \
-  'traversal|403|/traversal.php?file=../../../../../etc/passwd'; do
+  "xss|403|/xss.php?q=%3Cscript%3Ealert(1)%3C/script%3E&wlt=${TAG}" \
+  "sqli|403|/sqli.php?id=1%20OR%201=1&wlt=${TAG}" \
+  "traversal|403|/traversal.php?file=../../../../../etc/passwd&wlt=${TAG}"; do
   NAME="${spec%%|*}"; REST="${spec#*|}"; EXPECTED="${REST%%|*}"; PATH_Q="${REST#*|}"
   EXTRA=(); [[ "$PATH_Q" == /health.php ]] || EXTRA=(--interface "$LAB_IP")
   CODE="$(curl "${EXTRA[@]}" --noproxy '*' -k -sS --max-time 8 -o /dev/null -w '%{http_code}' "http://${LAB_IP}${PATH_Q}" || true)"
@@ -104,7 +107,14 @@ for spec in \
 done
 printf '\n== ModSecurity audit log ==\n'
 ls -lh /var/log/apache2/modsec_audit.log || FAIL=1
-grep -q -- '-A--' /var/log/apache2/modsec_audit.log || { echo 'No ModSecurity serial audit transaction found after probes' >&2; FAIL=1; }
+TAGGED=0
+for _ in 1 2 3 4 5; do
+  TAGGED="$(grep -cF -- "wlt=${TAG}" /var/log/apache2/modsec_audit.log || true)"
+  (( TAGGED >= 3 )) && break
+  sleep 1
+done
+echo "Audit records of this run's probes: ${TAGGED} (expected 3, tag ${TAG})"
+(( TAGGED >= 3 )) || { echo 'The audit log lacks the transactions of these probes' >&2; FAIL=1; }
 if command -v wardend >/dev/null; then
   printf '\n== Warden config ==\n'
   wardend --check-config --config /etc/warden/warden.toml || FAIL=1

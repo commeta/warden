@@ -66,6 +66,10 @@ fn reference_config_is_valid_and_matches_defaults() {
     assert_eq!(c.fim.trust_writable_logs, d.fim.trust_writable_logs);
     assert_eq!(c.waf.trust_writable_logs, d.waf.trust_writable_logs);
     assert_eq!(c.waf.discover, d.waf.discover);
+    // 0.14.3
+    assert_eq!(c.actions.firewall.ipv6_prefix, d.actions.firewall.ipv6_prefix);
+    assert_eq!(d.actions.firewall.ipv6_prefix, 64);
+    assert_eq!(c.events.max_info_per_minute, d.events.max_info_per_minute);
 }
 
 #[test]

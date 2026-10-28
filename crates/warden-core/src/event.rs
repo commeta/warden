@@ -375,6 +375,12 @@ impl Event {
         self.actions.iter().any(ActionSpec::is_urgent)
     }
 
+    /// Whether any action is neither containment nor a block: what the slow
+    /// lane of the executor runs.
+    pub fn has_slow_actions(&self) -> bool {
+        self.actions.iter().any(|a| !a.is_urgent() && !a.is_block())
+    }
+
     /// One-line human summary used by log output and notifications.
     pub fn summary(&self) -> String {
         let state = if self.resolved { " [resolved]" } else { "" };

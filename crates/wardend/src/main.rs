@@ -271,28 +271,40 @@ async fn run(args: Args, cfg: Config, files: Vec<String>) -> Result<()> {
     let events = Arc::new(queue::EventQueue::new(engine::EVENT_QUEUE));
     let sink = engine::sink(shared.clone(), events.clone());
 
-    // The action executor (two lanes) and the notifier each own a thread
+    // The action executor (three lanes) and the notifier each own a thread
     // and a bounded queue. All are supervised: a panic restarts the thread
     // instead of silently ending remediation (or notifications) for the
     // rest of the run. The lanes share budgets, cooldowns and the
-    // firewall/quarantine handles; kills, stops, freezes, IP blocks and
-    // quarantine take the urgent lane, so they never wait behind a
-    // `systemctl restart`, `apt-get clean` or a hook in the slow one.
+    // firewall/quarantine handles. Kills, stops, freezes, quarantine and
+    // throttling take the containment lane (a priority queue: a full one
+    // gives up its least important event, never the kill); `block_ip`
+    // steps the network lane, which batches them into nft transactions;
+    // `systemctl restart`, `apt-get clean` and hooks the slow lane. A kill
+    // waits neither for a cleanup nor for a storm of blocks (N23).
     let mut responder = Responder::new(&cfg);
     let mut slow_responder = responder.lane();
+    let mut net_responder = responder.lane();
     let handles = responder.handles();
-    let (respond_tx, respond_rx) = std::sync::mpsc::sync_channel(engine::WORKER_QUEUE);
+    let contain = Arc::new(queue::LaneQueue::new(engine::WORKER_QUEUE));
+    let network = Arc::new(queue::BlockQueue::new(engine::BLOCK_QUEUE));
+    let (contain_len, network_len) = (contain.clone(), network.clone());
     let (slow_tx, slow_rx) = std::sync::mpsc::sync_channel(engine::WORKER_QUEUE);
     let responder_thread = {
-        let (s, b) = (shared.clone(), sink.clone());
+        let (s, b, q) = (shared.clone(), sink.clone(), contain.clone());
         warden_detect::runtime::spawn_worker("respond", shared.clone(), sink.clone(), move || {
-            engine::run_responder(&s, &mut responder, &respond_rx, &b)
+            engine::run_responder(&s, &mut responder, engine::from_lane(&q), &b)
+        })?
+    };
+    let net_responder_thread = {
+        let (s, b, q) = (shared.clone(), sink.clone(), network.clone());
+        warden_detect::runtime::spawn_worker("respond-net", shared.clone(), sink.clone(), move || {
+            engine::run_network(&s, &mut net_responder, &q, &b)
         })?
     };
     let slow_responder_thread = {
         let (s, b) = (shared.clone(), sink.clone());
         warden_detect::runtime::spawn_worker("respond-slow", shared.clone(), sink.clone(), move || {
-            engine::run_responder(&s, &mut slow_responder, &slow_rx, &b)
+            engine::run_responder(&s, &mut slow_responder, engine::from_channel(&slow_rx), &b)
         })?
     };
     let (notify_tx, notify_rx) = std::sync::mpsc::sync_channel(engine::WORKER_QUEUE);
@@ -308,7 +320,7 @@ async fn run(args: Args, cfg: Config, files: Vec<String>) -> Result<()> {
         shared.clone(),
         ring.clone(),
         notify_tx,
-        engine::Lanes { urgent: respond_tx, slow: slow_tx },
+        engine::Lanes { contain, network, slow: slow_tx },
     )?;
     tokio::spawn(engine::run(eng, events));
 
@@ -351,10 +363,13 @@ async fn run(args: Args, cfg: Config, files: Vec<String>) -> Result<()> {
     // Housekeeping: persist learned state, decay scores, publish gauges.
     {
         let s = shared.clone();
+        let (cq, nq) = (contain_len.clone(), network_len.clone());
         tokio::spawn(async move {
             let mut iv = tokio::time::interval(Duration::from_secs(60));
             loop {
                 iv.tick().await;
+                s.metrics.set("warden_queue_length", &[("queue", "contain")], cq.len() as f64);
+                s.metrics.set("warden_queue_length", &[("queue", "network")], nq.len() as f64);
                 let s2 = s.clone();
                 let _ = tokio::task::spawn_blocking(move || {
                     if let Err(e) = lock(&s2.lineage).save() {
@@ -483,13 +498,15 @@ async fn run(args: Args, cfg: Config, files: Vec<String>) -> Result<()> {
     while Instant::now() < deadline
         && (!supervisor.registry.running().is_empty()
             || !responder_thread.is_finished()
+            || !net_responder_thread.is_finished()
             || !slow_responder_thread.is_finished()
             || !notifier_thread.is_finished())
     {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     let busy = supervisor.registry.running();
-    let responder_busy = !responder_thread.is_finished() || !slow_responder_thread.is_finished();
+    let responder_busy =
+        !responder_thread.is_finished() || !net_responder_thread.is_finished() || !slow_responder_thread.is_finished();
     if !busy.is_empty() || responder_busy {
         tracing::warn!(components = ?busy, responder_busy, "stopping with threads still busy");
     }

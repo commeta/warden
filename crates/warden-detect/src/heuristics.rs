@@ -9,11 +9,11 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use warden_core::config::HeuristicsConfig;
 use warden_core::event::now_ms;
+use warden_core::net::Key;
 use warden_core::{ActionSpec, Event, ProcessRef, Severity, Subject};
 
 #[derive(Debug, Clone)]
@@ -47,7 +47,11 @@ pub struct ScoreView {
 pub struct Heuristics {
     cfg: HeuristicsConfig,
     procs: HashMap<(i32, u64), Entry>,
-    ips: HashMap<IpAddr, Entry>,
+    /// Remote peers by [`Key`]: an IPv6 attacker is one entry per /64, not
+    /// one per address (N25).
+    ips: HashMap<Key, Entry>,
+    /// `actions.firewall.ipv6_prefix`.
+    ipv6_prefix: u8,
     /// Expiry runs when a table grows past its mark (doubling after each
     /// pass), never on every event: before 0.14.2 the address table was
     /// not expired at all unless the process table was large (N3).
@@ -66,6 +70,7 @@ impl Heuristics {
             cfg: cfg.clone(),
             procs: HashMap::new(),
             ips: HashMap::new(),
+            ipv6_prefix: warden_core::net::DEFAULT_IPV6_PREFIX,
             procs_gc_at: GC_MIN,
             ips_gc_at: GC_MIN,
             evicted: 0,
@@ -101,6 +106,16 @@ impl Heuristics {
 
     pub fn set_config(&mut self, cfg: &HeuristicsConfig) {
         self.cfg = cfg.clone();
+    }
+
+    /// Count addresses by the IPv6 network of `prefix` bits (see
+    /// `actions.firewall.ipv6_prefix`). A change forgets the address scores:
+    /// they were kept under keys of the old length.
+    pub fn set_ipv6_prefix(&mut self, prefix: u8) {
+        if prefix != self.ipv6_prefix {
+            self.ipv6_prefix = prefix;
+            self.ips.clear();
+        }
     }
 
     fn weight(&self, kind: &str) -> f64 {
@@ -200,11 +215,12 @@ impl Heuristics {
             Subject::Ip { addr } => Some(*addr),
             _ => ev.details.get("ip").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()),
         };
-        if let Some(ip) = ip {
-            let e = self.ips.entry(ip).or_insert_with(|| Entry {
+        if let Some(ip) = ip.map(warden_core::net::canonical) {
+            let key = Key::of(ip, self.ipv6_prefix);
+            let e = self.ips.entry(key).or_insert_with(|| Entry {
                 score: 0.0,
                 at: now,
-                label: ip.to_string(),
+                label: key.to_string(),
                 reasons: Vec::new(),
                 alerted: false,
                 contained: false,
@@ -222,18 +238,23 @@ impl Heuristics {
             if (e.score * 10.0).round() / 10.0 >= self.cfg.ip_block_score && !e.contained && !already_blocking && !held
             {
                 e.contained = true;
-                out.push(
-                    Event::new(
-                        "heuristics.ip_threshold",
-                        Severity::Warning,
-                        format!("remote {ip} reached suspicion score {:.0} ({})", e.score, e.reasons.join(", ")),
-                    )
-                    .subject(Subject::Ip { addr: ip })
-                    .fingerprint(format!("heuristics.ip_threshold:{ip}"))
-                    .detail("score", e.score.round())
-                    .detail("reasons", e.reasons.clone())
-                    .actions(vec![ActionSpec::BlockIp { ttl: None }]),
-                );
+                let mut esc = Event::new(
+                    "heuristics.ip_threshold",
+                    Severity::Warning,
+                    format!("remote {key} reached suspicion score {:.0} ({})", e.score, e.reasons.join(", ")),
+                )
+                // the address of the event that crossed the threshold; the
+                // responder blocks its network (`details.prefix`)
+                .subject(Subject::Ip { addr: ip })
+                .fingerprint(format!("heuristics.ip_threshold:{key}"))
+                .detail("ip", ip.to_string())
+                .detail("score", e.score.round())
+                .detail("reasons", e.reasons.clone())
+                .actions(vec![ActionSpec::BlockIp { ttl: None }]);
+                if key.is_network() {
+                    esc = esc.detail("prefix", key.to_string());
+                }
+                out.push(esc);
             }
         }
         self.housekeeping(now);
@@ -460,6 +481,34 @@ mod tests {
         let v = h.record(&web, now);
         assert_eq!(v.len(), 1);
         assert!(v[0].details["reasons"].as_array().unwrap().iter().any(|r| r == "ssh_bruteforce"));
+    }
+
+    /// N25: evidence from many addresses of one IPv6 /64 adds up to one
+    /// score and one block of the /64.
+    #[test]
+    fn an_ipv6_network_is_scored_as_one_peer() {
+        let mut h = Heuristics::new(&HeuristicsConfig::default());
+        let now = Instant::now();
+        // waf_attack weighs 40, ip_block_score is 60: two addresses of one /64 suffice
+        let hit = |i: u16| {
+            Event::new("security.waf_attack", Severity::Warning, "x").detail("ip", format!("2001:db8:aa:1::{i:x}"))
+        };
+        assert!(h.record(&hit(1), now).is_empty());
+        let v = h.record(&hit(2), now);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].kind, "heuristics.ip_threshold");
+        assert_eq!(v[0].details["prefix"], "2001:db8:aa:1::/64");
+        assert_eq!(v[0].details["ip"], "2001:db8:aa:1::2");
+        assert_eq!(v[0].fingerprint, "heuristics.ip_threshold:2001:db8:aa:1::/64");
+        // the network is contained once, whichever address comes next
+        assert!(h.record(&hit(3), now).is_empty());
+        // another /64 is another peer; IPv4 is per address
+        assert!(h.record(&hit(1).detail("ip", "2001:db8:aa:2::1"), now).is_empty());
+        assert_eq!(h.table_sizes().1, 2);
+        // per address again (128): the scores are kept apart
+        h.set_ipv6_prefix(128);
+        assert!(h.record(&hit(4), now).is_empty());
+        assert!(h.record(&hit(5), now).is_empty());
     }
 
     #[test]

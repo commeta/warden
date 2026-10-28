@@ -209,18 +209,18 @@ pub async fn handle(ctx: &Ctx, req: Request) -> Response {
             }
         }
         Request::Block { ip, ttl_secs } => {
-            let Ok(addr) = ip.parse() else { return Response::err(format!("invalid IP {ip}")) };
+            let Some(key) = parse_peer(shared, &ip) else { return Response::err(invalid_peer(shared, &ip)) };
             let fw = ctx.handles.firewall.clone();
-            match blocking(move || lock(&fw).block(addr, ttl_secs.map(Duration::from_secs))).await {
+            match blocking(move || lock(&fw).block_key(key, ttl_secs.map(Duration::from_secs))).await {
                 Ok(Ok(m)) => Response::ok(m),
                 Ok(Err(e)) => Response::err(e),
                 Err(e) => e,
             }
         }
         Request::Unblock { ip } => {
-            let Ok(addr) = ip.parse() else { return Response::err(format!("invalid IP {ip}")) };
+            let Some(key) = parse_peer(shared, &ip) else { return Response::err(invalid_peer(shared, &ip)) };
             let fw = ctx.handles.firewall.clone();
-            match blocking(move || lock(&fw).unblock(addr)).await {
+            match blocking(move || lock(&fw).unblock(key)).await {
                 Ok(Ok(m)) => Response::ok(m),
                 Ok(Err(e)) => Response::err(e),
                 Err(e) => e,
@@ -299,6 +299,17 @@ pub async fn handle(ctx: &Ctx, req: Request) -> Response {
             Response::ok("snapshot requested; see `wardenctl events` for the result")
         }
     }
+}
+
+/// `wardenctl block|unblock` take an address or an IPv6 network of the
+/// configured prefix (`2001:db8:aa:1::/64`).
+fn parse_peer(shared: &Shared, s: &str) -> Option<warden_core::net::Key> {
+    warden_core::net::Key::parse(s, shared.config().actions.firewall.ipv6_prefix)
+}
+
+fn invalid_peer(shared: &Shared, s: &str) -> String {
+    let p = shared.config().actions.firewall.ipv6_prefix;
+    format!("invalid address {s:?}: give an IP address, or an IPv6 network /{p} (actions.firewall.ipv6_prefix)")
 }
 
 // ---------------------------------------------------------------------------

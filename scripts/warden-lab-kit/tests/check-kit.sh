@@ -124,6 +124,13 @@ grep -q 'ACK_WARDEN_ENFORCEMENT=YES' "$ROOT/guest/60-waf-block-test.sh" || fail 
 if grep -Rq '^/var/log/apache2/' "$ROOT/guest" --include='*.sh'; then fail 'kit rotates a file in /var/log/apache2 (duplicates /etc/logrotate.d/apache2)'; else echo 'OK   no duplicate logrotate entry for /var/log/apache2'; fi
 # the audit log must not be writable by the web user
 if grep -q 'chown www-data[^ ]* .*modsec_audit.log' "$ROOT/guest/10-install-stack.sh"; then fail 'modsec_audit.log owned by www-data (forgeable by a webshell)'; else echo 'OK   audit log not owned by www-data'; fi
+# 0.14.3: the release pin lives in lab.env alone; local sources and packages
+if grep -Eq 'WARDEN_VERSION=[0-9]|WARDEN_DEB_SHA256=[0-9A-Fa-f]{64}' "$ROOT/lib/lab-common.sh"; then fail 'lab-common.sh hard-codes a release (goes stale: keep it in lab.env)'; else echo 'OK   no release hard-coded in lab-common.sh'; fi
+if bash "$ROOT/guest/70-warden-lab-source-tests.sh" --help | grep -q -- '--source DIR'; then echo 'OK   source tests accept a local source tree'; else fail '70-warden-lab-source-tests.sh --source missing'; fi
+grep -q 'WARDEN_LAB_BUILD_ROOT' "$ROOT/guest/70-warden-lab-source-tests.sh" || fail 'source tests build on a fixed path'
+grep -q 'rm -f /etc/logrotate.d/warden-lab-modsecurity' "$ROOT/guest/20-install-warden.sh" || fail 'Warden install does not remove the stale logrotate entry'
+grep -q 'WARDEN_DEB_FILE_SHA256' "$ROOT/guest/20-install-warden.sh" || fail 'local package install is not pinned'
+grep -q 'START_ID' "$ROOT/guest/60-waf-block-test.sh" || fail 'block test evidence is not bound to this run'
 for required in README.md lab.env.example lib/lab-common.sh docs/FIREWALL-ARCHITECTURE.md docs/TEST-MATRIX.md guest/01-prepare.sh guest/10-install-stack.sh guest/20-install-warden.sh guest/30-validate.sh guest/40-waf-smoke.sh guest/50-longrun-smoke.sh guest/60-waf-block-test.sh guest/config/nft-base-apply.sh.in guest/config/warden-dropin.toml.in guest/systemd/warden-lab-nftables.service; do
   [[ -f "$ROOT/$required" ]] || fail "missing file: $required"
 done

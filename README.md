@@ -41,9 +41,10 @@ libgcc). No agent in the kernel, no eBPF toolchain, no Python runtime. The
 `.deb` installs and runs on Debian 12, Ubuntu 22.04 and 24.04 (checked in CI);
 any Linux with glibc 2.34+ runs it from the tarball (kernel features: see
 [Compatibility](#compatibility)).
-Small enough for a 1 GiB VPS: ~10 MiB RSS with a typical set of detectors,
-~33 MiB with every module on and a 20 000-file site under FIM; a module you
-disable has no thread and no memory at all ([measurements](docs/performance.md)).
+Small enough for a 1 GiB VPS: ~13 MiB RSS for the daemon core, ~16 MiB
+with a typical set of detectors, ~38 MiB with every module on and a
+20 000-file site under FIM; a module you disable has no thread and no memory
+at all ([measurements](docs/performance.md)).
 
 ## Highlights
 
@@ -54,9 +55,10 @@ disable has no thread and no memory at all ([measurements](docs/performance.md))
   kill it before the kernel OOM killer picks the wrong victim; a kill that
   does not free memory stops further kills for the episode. Warden `mlock`s itself so it stays responsive while the host
   thrashes.
-- **Whole-host freeze detection.** Measures how late its own high-priority,
-  memory-locked scheduler wakes up — a direct signal that the machine was
-  unresponsive, with a diagnostic snapshot captured during the freeze.
+- **Whole-host freeze detection.** Measures how late its own memory-locked
+  fast scheduler thread wakes up — a direct signal that the machine was
+  unresponsive, with a diagnostic snapshot captured during the freeze (a late
+  wake-up explained by hypervisor steal time is a notice, not an incident).
 - **Disk self-healing.** Space, inodes, read-only remounts, and a fill-rate
   *prediction*. An ordered cleanup playbook (vacuum journald, `apt clean`,
   delete old logs, truncate huge logs, release deleted-but-open files) runs
@@ -75,17 +77,20 @@ disable has no thread and no memory at all ([measurements](docs/performance.md))
   reports the **writer PID** — the exact worker that infected the file). A
   signature engine flags webshells/droppers in PHP, Node, Python, JSP/ASP and
   `.htaccess` tricks; access-log correlation names the request that planted
-  the file and blocks the IPs using the shell.
+  the file and blocks the clients using the shell.
 - **System integrity & auth.** Baselines `/etc/passwd`, sudoers, SSH keys,
   cron, systemd units, `ld.so.preload`, PAM… (with dpkg-checksum verification
   so package upgrades aren't false positives), sees a new SUID/SGID file **the
   moment it appears** (fanotify filesystem marks; a weekly walk remains as a
   safety net), watches listening sockets, and parses journald/auth.log for SSH brute force (with
   automatic blocking), root logins and account changes.
-- **ModSecurity integration (v2 and v3).** Reads the audit log (native or
-  JSON) or the Apache/nginx error log, blocks clients that ModSecurity keeps
-  stopping (it judges requests, Warden remembers attackers) and ranks
-  WAF-flagged IPs first when hunting the request that planted a webshell.
+- **ModSecurity integration (v2 and v3).** Reads the audit log (serial —
+  native or JSON — or concurrent, checked against its index) or the
+  Apache/nginx error log, finds the logs of every virtual host itself, blocks
+  clients that ModSecurity keeps stopping (it judges requests, Warden
+  remembers attackers — an IPv6 attacker by his /64, however many addresses
+  he rotates through) and ranks WAF-flagged clients first when hunting the
+  request that planted a webshell.
 - **Works with every web stack.** nginx, Apache, LiteSpeed; PHP via FPM,
   mod_php, CGI/FastCGI/mod_fcgid, suEXEC/mpm-itk per-site users; Node, Python,
   Ruby, Java app servers — see [docs/integrations.md](docs/integrations.md).
@@ -103,16 +108,22 @@ disable has no thread and no memory at all ([measurements](docs/performance.md))
   not fit your hardware and workload; capacity limits (conntrack, pid_max,
   file-max) can grow automatically within RAM-derived caps — behaviour knobs
   are never changed behind your back.
-- **Heuristic scoring.** Individual findings accumulate per-process and per-IP
-  suspicion with exponential decay; crossing a threshold contains the process
-  or blocks the address. It also learns each service's normal
-  parent→child lineage and flags never-seen ones.
+- **Heuristic scoring.** Individual findings accumulate per-process and
+  per-peer (an IPv4 address, an IPv6 /64) suspicion with exponential decay;
+  crossing a threshold contains the process or blocks the peer. It also
+  learns each service's normal parent→child lineage and flags never-seen
+  ones.
 - **Guarded auto-remediation.** kill (race-free via pidfd), SIGSTOP for
   forensics, throttle (nice + idle I/O), freeze/kill a cgroup, restart a unit,
   runtime unit limits, quarantine a file (even one made `chattr +i`), block an
-  IP (nftables with kernel timeouts), bounded sysctl growth, diagnostic
-  snapshots, cleanup, or your own hook. Protected-process lists, circuit breakers, per-target
-  cooldowns, path guards and a global **dry-run** keep it safe.
+  address or an IPv6 network (nftables with kernel timeouts, thousands of
+  blocks a second in batched transactions that never hold up a kill),
+  bounded sysctl growth, diagnostic snapshots, cleanup, or your own hook.
+  Protected-process lists, circuit breakers (with a separate budget for
+  blocks and a reserve for containment), per-target cooldowns, path guards,
+  a firewall that never blocks an allow-listed address (nor a network
+  holding one) and blocks an SSH-connected one only on the journal's own
+  evidence, and a global **dry-run** keep it safe.
 - **Operable.** Prometheus `/metrics` and `/health`, a JSON-lines event
   journal, Slack/Mattermost/Telegram/command notifications, a rich
   `wardenctl`, live config reload, and an offline `wardenctl doctor`.
@@ -121,7 +132,7 @@ disable has no thread and no memory at all ([measurements](docs/performance.md))
 
 ```console
 $ wardenctl status
-Warden 0.14.2 on web-01 — pid 914, up 6days 2h  
+Warden 0.14.3 on web-01 — pid 914, up 6days 2h  
 Levels:   memory ok   cpu ok   io ok   disk warning
 Sensors:  psi_trigger running · kmsg running · proc_connector running ·
           auth running · fim_realtime running · access_log running
@@ -137,7 +148,7 @@ $ wardenctl events -n 6
                    actions: quarantine, restart_unit
 12:55:20 critical  security.webshell_access  203.0.113.66 requested flagged file /wp-content/uploads/cache.php
                    actions: block_ip
-12:55:20 warning   action.block_ip        block_ip 203.0.113.66 → done: blocked for 24h
+12:55:20 warning   action.block_ip        block_ip 203.0.113.66 → done: blocked 203.0.113.66 for 86400s
 
 $ wardenctl mem-top -n 3 --interval 2s
 memory PSI: some avg10=38.20 | full avg10=12.80  (full = all tasks stalled)
@@ -171,6 +182,9 @@ sudo systemctl enable --now wardend
 toolchain if the binaries are missing or stale, so you can also skip step 2.
 Re-running it upgrades binaries and the unit, keeps your configuration (new
 reference files go next to it as `*.new`) and restarts a running service.
+The new binary validates your configuration before anything is replaced; the
+previous binaries are kept as `*.old` and put back if the restarted service
+does not come up.
 
 Requires Rust ≥ 1.88 to build (edition 2024 `let` chains). Recommended runtime tools: `nftables` (IP
 blocking) and `systemd`/`journalctl` (auth events, journal vacuum). Warden
@@ -180,7 +194,7 @@ missing piece costs.
 ### Debian / Ubuntu package
 
 ```bash
-./scripts/build-deb.sh            # as your normal user → target/debian/warden_0.14.2-1_amd64.deb
+./scripts/build-deb.sh            # as your normal user → target/debian/warden_0.14.3-1_amd64.deb
 sudo apt install ./target/debian/warden_*.deb
 ./scripts/build-deb.sh --portable # for other machines: linked in an Ubuntu 22.04 container (docker/podman),
                                   # → target/portable/debian/…, installs on Debian 12, Ubuntu 22.04 and newer
@@ -287,7 +301,7 @@ window  = "1s"
 | `wardenctl mem-top --interval 2s` | per-process RSS/swap/major-faults-per-sec |
 | `wardenctl psi` | current PSI for cpu/memory/io |
 | `wardenctl fim status \| scan [site] \| accept <site> [path] \| pause <site> 30m` | FIM control (pause around deploys) |
-| `wardenctl block <ip> [--ttl 1h] \| unblock <ip> \| blocklist` | firewall |
+| `wardenctl block <ip\|net> [--ttl 1h] \| unblock <ip\|net> \| blocklist` | firewall: an address, or an IPv6 network of `ipv6_prefix` (`2001:db8:aa:1::/64`); unblocking an address lifts its network |
 | `wardenctl quarantine list \| restore <id>` | quarantined files |
 | `wardenctl snapshot [reason]` | capture a diagnostic snapshot now |
 | `wardenctl tuning [--revert]` | kernel tuning advice; sysctl changes Warden made (and undo) |
@@ -302,11 +316,16 @@ window  = "1s"
 disk usage and fill-ETA per mount, per-detector tick time, event/action
 counters, bytes reclaimed, blocklist size, sensor up/down and more.
 `/health` returns 503 if the fast scheduler's heartbeat goes stale (the same
-signal that drives the systemd watchdog). Warden also profiles itself:
-`warden_module_cpu_seconds_total`, `warden_module_heap_bytes`,
+signal that drives the systemd watchdog). The response path is visible too:
+`warden_queue_length{queue=contain|network}`, `warden_queue_dropped_total`,
+`warden_firewall_batches_total`, `warden_firewall_batched_blocks_total`,
+`warden_blocklist_entries`, `warden_journal_suppressed_total{kind}`. Warden also
+profiles itself: `warden_module_cpu_seconds_total`, `warden_module_heap_bytes`,
 `warden_thread_cpu_seconds_total`, `warden_self_cgroup_memory_bytes{kind=anon|page_cache|kernel}`
 — see [docs/performance.md](docs/performance.md) for what each module costs. Every event and action result is
-also written as JSON to `/var/log/warden/events.jsonl` (rotated).
+also written as JSON to `/var/log/warden/events.jsonl` (rotated); a flood of
+informational events of one kind is counted rather than journaled past
+`events.max_info_per_minute`.
 
 ## Project layout
 
@@ -324,8 +343,12 @@ config/             reference warden.toml, conf.d profiles (webserver, database,
 packaging/          systemd unit, nftables template, deb maintainer scripts
 scripts/            install.sh · uninstall.sh · build-deb.sh [--portable] · check-seccomp.sh · check-glibc.sh ·
                     test-deb-install.sh
-fuzz/               cargo-fuzz targets for every parser of untrusted input (bodies in crates/warden-fuzz)
-bench/              profile.py (per-module CPU/I/O/RAM matrix) · dhat_modules.py (heap by module)
+fuzz/               cargo-fuzz targets for the parsers of untrusted input — access log, auth log, ModSecurity,
+                    /proc, proc connector, fanotify, D-Bus, redaction (bodies in crates/warden-fuzz)
+bench/              profile.py (per-module CPU/I/O/RAM matrix) · stress.py (hostile load: WAF floods, block
+                    storms, IPv6 rotation, exec storms) · dhat_modules.py (heap by module)
+scripts/warden-lab-kit/  an Ubuntu lab with Apache/nginx + ModSecurity + CRS, WAF probes, an active block test
+                    and the source test run (--source DIR for a local tree)
 docs/               architecture · detectors · integrations (web stacks, ModSecurity, DB, containers) · security ·
                     events (catalogue of every event) · performance (measured cost of every module) ·
                     reviews/ (code review and audit reports, Russian)
@@ -345,13 +368,15 @@ cd fuzz && cargo +nightly fuzz run access_log   # libFuzzer; `cargo test -p ward
 ```
 
 CI additionally installs the real systemd unit on a fresh Ubuntu 24.04 VM,
-starts it, checks it stays up without restarts or core dumps, and has it
-catch a webshell — the class of failure unit tests cannot see. It builds the
+starts it and checks it stays up without restarts or core dumps — the class
+of failure unit tests cannot see (catching a webshell through the running
+service is a step of that job, switched on by the repository variable
+`ENABLE_WEBSHELL_SMOKE`). It builds the
 `.deb` on Ubuntu 22.04 and installs and starts it in clean Debian 12,
 Ubuntu 22.04 and 24.04 containers; measures coverage on every push and pull
 request (job summary and a PR comment; the build fails below the floor or
-when coverage drops more than half a point under main's); and fuzzes every
-parser of untrusted input for a minute per target.
+when coverage drops more than half a point under main's); and fuzzes each
+of the eight targets for a minute per push and ten minutes every night.
 
 The test suite is extensive and deliberately exercises real kernel interfaces
 (it parses live `/proc`, opens pidfds, registers PSI triggers and fanotify
@@ -370,7 +395,7 @@ marks) rather than only mocks, plus a full end-to-end test that boots the
 | instant failed-unit alerts | systemd + system D-Bus | `systemctl` polling every `systemd.interval` |
 | real-time web FIM | fanotify + `CAP_SYS_ADMIN` | falls back to scheduled scans |
 | freeze/kill a service | cgroup v2 | those actions unavailable |
-| IP blocking | `nft` | block actions fail (reported) |
+| IP blocking | `nft` (Warden creates its own table `inet warden` and its three sets) | block actions fail (reported) |
 | auth events, journal vacuum | systemd/journalctl (else auth.log) | reads the log file instead |
 | WAF correlation | ModSecurity v2 or v3 writing an audit or error log | — |
 | quarantine of `chattr +i` files | `CAP_LINUX_IMMUTABLE` (granted by the unit) | quarantine fails with EPERM (reported) |

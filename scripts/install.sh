@@ -265,5 +265,6 @@ Warden installed.
   Start     : systemctl enable --now wardend
   Watch     : wardenctl status ; wardenctl events -f
   Mode      : dry_run = true by default (detect & report only). Review 'wardenctl events',
-              then enable remediation: 'wardenctl dry-run off' (until the next reload or restart) or dry_run = false in the config.
+              then enable remediation: 'wardenctl dry-run off' (kept across reloads and restarts,
+              until 'wardenctl dry-run reset') or dry_run = false in the config.
 EOF

@@ -1,25 +1,146 @@
 ==> Source ref: main
 
-==> Log file: /var/log/warden-lab/source-tests/20261025T211155Z.log
+==> Log file: /var/log/warden-lab/source-tests/20261028T031044Z.log
 
 ==> Installed Debian package version: 0.14.1-1
 
-==> Installed daemon service state before tests: active
+==> Installed daemon service state before tests: inactive
 
 ==> Updating existing source checkout
 From https://github.com/commeta/warden
  * branch            main       -> FETCH_HEAD
-HEAD is now at 7b9e49a Add files via upload
-Source commit: 7b9e49ada42d31264e092785a4609e037f44948d
-Commit subject: Add files via upload
-Commit date: 2026-10-25T23:37:46+03:00
+ + 7202e1f...2852c46 main       -> origin/main  (forced update)
+Warning: you are leaving 1 commit behind, not connected to
+any of your branches:
+
+  7202e1f Update 0.14.2
+
+If you want to keep it by creating a new branch, this may be a good time
+to do so with:
+
+ git branch <new-branch-name> 7202e1f
+
+HEAD is now at 2852c46 Update ci.yml
+Source commit: 2852c467c0eb8fa305003d73ee0e20815e5c596b
+Commit subject: Update ci.yml
+Commit date: 2026-10-28T05:57:52+03:00
 Rust compiler: rustc 1.99.1 (58cf8f9c3 2026-10-13)
 
 ==> Running full workspace tests as root (single test thread)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.37s
-     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_core-e1872225f1b1c0ea)
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.27
+   Compiling quote v1.0.47
+   Compiling libc v0.2.191
+   Compiling serde_core v1.0.229
+   Compiling cfg-if v1.0.5
+   Compiling serde v1.0.229
+   Compiling once_cell v1.21.4
+   Compiling memchr v2.8.3
+   Compiling find-msvc-tools v0.1.15
+   Compiling shlex v2.0.1
+   Compiling log v0.4.34
+   Compiling cc v1.9.0
+   Compiling thiserror v2.0.21
+   Compiling itoa v1.0.18
+   Compiling aho-corasick v1.1.5
+   Compiling regex-syntax v0.8.11
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.154
+   Compiling syn v3.0.9
+   Compiling winnow v1.0.4
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling serde_spanned v1.1.2
+   Compiling toml_datetime v0.7.5+spec-1.1.0
+   Compiling bstr v1.13.1
+   Compiling humantime v2.4.0
+   Compiling winnow v0.7.15
+   Compiling regex-automata v0.4.18
+   Compiling toml_writer v1.1.3+spec-1.1.0
+   Compiling tracing-core v0.1.36
+   Compiling syn v2.0.119
+   Compiling pin-project-lite v0.2.17
+   Compiling blake3 v1.8.7
+   Compiling getrandom v0.4.3
+   Compiling rustix v1.1.5
+   Compiling toml v0.9.12+spec-1.1.0
+   Compiling bitflags v2.13.2
+   Compiling cpufeatures v0.3.1
+   Compiling arrayvec v0.7.8
+   Compiling serde_derive v1.0.229
+   Compiling thiserror-impl v2.0.21
+   Compiling globset v0.4.20
+   Compiling regex v1.13.1
+   Compiling tracing-attributes v0.1.31
+   Compiling version_check v0.9.5
+   Compiling linux-raw-sys v0.12.1
+   Compiling constant_time_eq v0.4.2
+   Compiling generic-array v0.14.7
+   Compiling ring v0.17.14
+   Compiling tracing v0.1.44
+   Compiling fastrand v2.5.0
+   Compiling humantime-serde v1.1.1
+   Compiling warden-sys v0.14.2 (/opt/warden-lab/source/warden/crates/warden-sys)
+   Compiling zeroize v1.9.1
+   Compiling warden-core v0.14.2 (/opt/warden-lab/source/warden/crates/warden-core)
+   Compiling typenum v1.20.1
+   Compiling rustls-pki-types v1.15.1
+   Compiling tempfile v3.27.0
+   Compiling getrandom v0.2.17
+   Compiling bytes v1.12.1
+   Compiling httparse v1.10.1
+   Compiling untrusted v0.9.0
+   Compiling rustls v0.23.46
+   Compiling http v1.5.0
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling subtle v2.6.1
+   Compiling base64 v0.23.1
+   Compiling digest v0.10.7
+   Compiling webpki-roots v1.0.10
+   Compiling utf8-zero v0.8.1
+   Compiling percent-encoding v2.3.2
+   Compiling md-5 v0.10.6
+   Compiling utf8parse v0.2.2
+   Compiling warden-respond v0.14.2 (/opt/warden-lab/source/warden/crates/warden-respond)
+   Compiling anstyle-parse v1.0.0
+   Compiling anstyle v1.0.14
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling colorchoice v1.0.5
+   Compiling anstyle-query v1.1.5
+   Compiling strsim v0.11.1
+   Compiling anstream v1.0.0
+   Compiling ureq-proto v0.6.5
+   Compiling clap_lex v1.1.1
+   Compiling heck v0.5.0
+   Compiling anyhow v1.0.104
+   Compiling clap_derive v4.6.7
+   Compiling clap_builder v4.6.7
+   Compiling errno v0.3.14
+   Compiling lazy_static v1.5.1
+   Compiling sharded-slab v0.1.7
+   Compiling signal-hook-registry v1.4.8
+   Compiling tracing-serde v0.2.0
+   Compiling matchers v0.2.0
+   Compiling tokio-macros v2.7.2
+   Compiling tracing-log v0.2.0
+   Compiling mio v1.2.4
+   Compiling socket2 v0.6.5
+   Compiling thread_local v1.1.10
+   Compiling clap v4.6.7
+   Compiling smallvec v1.16.3
+   Compiling nu-ansi-term v0.50.3
+   Compiling tokio v1.54.1
+   Compiling tracing-subscriber v0.3.23
+   Compiling rustls-webpki v0.103.16
+   Compiling ureq v3.4.2
+   Compiling warden-detect v0.14.2 (/opt/warden-lab/source/warden/crates/warden-detect)
+   Compiling warden-fuzz v0.14.2 (/opt/warden-lab/source/warden/crates/warden-fuzz)
+   Compiling wardenctl v0.14.2 (/opt/warden-lab/source/warden/crates/wardenctl)
+   Compiling wardend v0.14.2 (/opt/warden-lab/source/warden/crates/wardend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 06s
+     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_core-f10d4af9b4f49de6)
 
-running 62 tests
+running 65 tests
 test action::tests::cooldown_key_tells_playbook_steps_apart ... ok
 test action::tests::rejects_unknown_action_and_missing_fields ... ok
 test action::tests::short_and_full_forms ... ok
@@ -59,12 +180,15 @@ test policy::tests::non_matching_rule_passes_through ... ok
 test policy::tests::suppress_by_detail_regex ... ok
 test protect::tests::a_name_alone_does_not_protect_an_impostor ... ok
 test protect::tests::default_protection ... ok
+test ratelimit::tests::a_flood_of_one_off_keys_does_not_evict_a_repeat_offender ... ok
 test ratelimit::tests::an_unused_reservation_is_given_back ... ok
 test ratelimit::tests::checking_a_cooldown_does_not_arm_it ... ok
 test ratelimit::tests::cooldown_per_key ... ok
 test ratelimit::tests::counter_rate ... ok
+test ratelimit::tests::evict_lowest_keeps_exactly_the_highest ... ok
 test ratelimit::tests::floods_of_distinct_keys_stay_cheap_and_bounded ... ok
 test ratelimit::tests::keyed_window_counts ... ok
+test ratelimit::tests::live_keys_are_capped ... ok
 test ratelimit::tests::peek_does_not_count ... ok
 test ratelimit::tests::sliding_window_limits ... ok
 test redact::tests::events_lose_secrets_but_keep_their_shape ... ok
@@ -83,24 +207,25 @@ test units::tests::displays_sizes ... ok
 test units::tests::parses_sizes ... ok
 test units::tests::truncate_cuts_on_characters ... ok
 
-test result: ok. 62 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+test result: ok. 65 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
 
-     Running tests/reference_config.rs (/var/tmp/warden-lab-source-target/debug/deps/reference_config-ee8393926c2a861d)
+     Running tests/reference_config.rs (/var/tmp/warden-lab-source-target/debug/deps/reference_config-685542c5628051ce)
 
 running 3 tests
 test defaults_roundtrip_through_toml ... ok
 test profiles_merge_with_reference ... ok
 test reference_config_is_valid_and_matches_defaults ... ok
 
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
 
-     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_detect-5ad1b0aa05da92b9)
+     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_detect-839700a7780e7452)
 
-running 131 tests
+running 161 tests
 test auth::tests::a_user_name_cannot_choose_the_address_that_gets_blocked ... ok
 test auth::tests::allowlisted_ip_is_not_blocked ... ok
 test auth::tests::bruteforce_then_block_then_success ... ok
 test auth::tests::journal_lines_need_a_sender_that_the_kernel_vouches_for ... ok
+test auth::tests::lines_from_the_auth_log_file_do_not_block_by_themselves ... ok
 test auth::tests::real_sshd_lines_still_match ... ok
 test auth::tests::sudo_and_accounts ... ok
 test auth::tests::syslog_split ... ok
@@ -140,6 +265,7 @@ test fim::tests::baseline_then_detect_infection ... ok
 test fim::tests::offline_scan ... ok
 test fim::tests::realtime_correlation_ignores_a_backdated_mtime ... ok
 test fim::tests::realtime_write_by_trusted_tool_is_accepted ... ok
+test fim::tests::webshell_access_from_a_web_writable_log_does_not_block ... ok
 test hardware::tests::an_unsynchronised_clock_is_reported_after_15_minutes_once ... ok
 test hardware::tests::clock_check_ignores_growing_max_error ... ok
 test hardware::tests::ecc_errors_are_reported_as_they_grow ... ok
@@ -180,6 +306,7 @@ test memory::tests::low_available_memory_alone_is_critical ... ok
 test memory::tests::oom_kills_are_reported_once_per_increase_unless_kmsg_does_it ... ok
 test memory::tests::paging_activity_is_sampled_while_memory_is_elevated ... ok
 test memory::tests::pressure_rises_repeats_while_critical_and_resolves ... ok
+test memory::tests::psi_alone_does_not_kill_when_memory_is_available ... ok
 test memory::tests::ranking_on_live_system ... ok
 test memory::tests::thresholds_scale_with_ram ... ok
 test pressure::tests::a_fork_storm_needs_two_hot_samples_and_is_rate_limited ... ok
@@ -187,6 +314,7 @@ test pressure::tests::cpu_pressure_must_be_sustained_and_clears_with_hysteresis 
 test pressure::tests::cpu_saturation_goes_critical_with_its_actions ... ok
 test pressure::tests::io_stall_raises_names_the_level_and_resolves ... ok
 test process::tests::a_reload_is_not_a_first_scan ... ok
+test process::tests::a_web_account_in_a_login_session_is_administration ... ok
 test process::tests::allowed_tool_through_shell_is_quiet ... ok
 test process::tests::apache_master_helpers_and_cgi_are_not_webshells ... ok
 test process::tests::creds_from_the_fast_path_keep_setuid_detection ... ok
@@ -205,6 +333,7 @@ test process::tests::upgrades_and_real_programs_are_not_attacks ... ok
 test process::tests::warden_s_own_commands_are_not_web_workers ... ok
 test process::tests::webshell_spawn_with_red_flags_is_critical_and_killed ... ok
 test prof::tests::scopes_and_ticks ... ok
+test runtime::tests::a_calm_vm_that_did_not_run_was_paused ... ok
 test runtime::tests::a_reload_keeps_a_detector_whose_configuration_did_not_change ... ok
 test runtime::tests::a_reload_that_changes_the_section_reconfigures_or_rebuilds_and_closes ... ok
 test runtime::tests::disabled_components_have_no_thread ... ok
@@ -220,25 +349,50 @@ test tuning::tests::live_gather_does_not_panic ... ok
 test tuning::tests::small_vps_without_swap_and_weak_hardening ... ok
 test tuning::tests::suid_dumpable_depends_on_where_core_dumps_go ... ok
 test tuning::tests::well_tuned_host_is_quiet ... ok
+test util::tests::a_new_file_is_read_from_its_start ... ok
+test util::tests::globs_expand_per_component_with_captures ... ok
+test util::tests::invalid_utf8_lines_are_kept_and_counted ... ok
+test util::tests::overlong_lines_keep_head_and_tail ... ok
 test util::tests::tail_follows_rotation_and_truncation ... ok
+test util::tests::who_can_write_a_log ... ok
+test waf::tests::a_cut_json_record_is_salvaged ... ok
+test waf::tests::a_flood_of_distinct_addresses_stays_bounded_and_cheap ... ok
 test waf::tests::apache_error_log ... ok
+test waf::tests::concurrent_index_lines ... ok
 test waf::tests::detection_only_and_ignored_rules ... ok
 test waf::tests::ipv6_and_ports ... ok
 test waf::tests::json_v3_and_v2 ... ok
 test waf::tests::native_serial ... ok
 test waf::tests::nginx_error_log ... ok
+test waf::tests::the_headline_is_the_most_severe_attack_rule ... ok
 test waf::tests::tracker_blocks_persistent_attacker_once ... ok
+test waf::tests::waf_evidence_from_a_web_writable_log ... ok
+test waf_discover::tests::apache_per_vhost_logs_and_modes ... ok
+test waf_discover::tests::audit_log_without_part_h_falls_back_to_the_error_log ... ok
+test waf_discover::tests::config_files_root_does_not_control_are_not_read ... ok
+test waf_discover::tests::nginx_connector_per_server ... ok
+test waf_discover::tests::statements_and_words ... ok
+test waf_sources::real_logs::a_cut_record_expires ... ok
+test waf_sources::real_logs::a_forged_record_in_a_request_body_stays_body ... ok
+test waf_sources::real_logs::concurrent_entries_and_index_lines ... ok
+test waf_sources::real_logs::json_logs ... ok
+test waf_sources::real_logs::serial_native_logs ... ok
+test waf_sources::tests::a_concurrent_log_with_user_directories_is_scanned ... ok
+test waf_sources::tests::a_concurrent_log_without_index_is_scanned ... ok
+test waf_sources::tests::a_symlinked_storage_subdirectory_is_not_followed ... ok
+test waf_sources::tests::concurrent_index_entries_are_read_and_parsed ... ok
+test waf_sources::tests::per_site_logs_from_a_glob_are_followed_and_new_sites_picked_up ... ok
 
-test result: ok. 131 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.58s
+test result: ok. 161 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 45.12s
 
-     Running tests/fingerprints.rs (/var/tmp/warden-lab-source-target/debug/deps/fingerprints-fc7407215ffd3831)
+     Running tests/fingerprints.rs (/var/tmp/warden-lab-source-target/debug/deps/fingerprints-804dc425f1dc0d87)
 
 running 1 test
 test every_fingerprint_follows_the_convention ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
 
-     Running tests/review_0_13.rs (/var/tmp/warden-lab-source-target/debug/deps/review_0_13-7ca5fd805562deb5)
+     Running tests/review_0_13.rs (/var/tmp/warden-lab-source-target/debug/deps/review_0_13-0d1a881b1fc18564)
 
 running 6 tests
 test a_unit_that_is_only_restarting_is_not_reported_as_recovered ... ok
@@ -248,33 +402,34 @@ test link_down_and_link_up_share_a_fingerprint ... ok
 test rewriting_a_file_with_identical_content_is_not_reported ... ok
 test suid_dumpable_2_with_a_core_pipe_is_not_flagged ... ok
 
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
 
-     Running tests/suspend.rs (/var/tmp/warden-lab-source-target/debug/deps/suspend-5d2c83b8adbe89a6)
+     Running tests/suspend.rs (/var/tmp/warden-lab-source-target/debug/deps/suspend-ecb56697dc45f532)
 
 running 1 test
 test a_daily_suid_walk_is_due_after_a_day_even_if_the_machine_slept_through_it ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.23s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.90s
 
-     Running tests/systemd_dbus.rs (/var/tmp/warden-lab-source-target/debug/deps/systemd_dbus-2d0e34aaab6ec69e)
+     Running tests/systemd_dbus.rs (/var/tmp/warden-lab-source-target/debug/deps/systemd_dbus-f9925e13a02ddabd)
 
 running 2 tests
 test a_dead_bus_is_an_error_not_a_hang ... ok
 test unit_failures_arrive_over_dbus ... ok
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.51s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.11s
 
-     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_fuzz-01668bb6bae01a36)
+     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_fuzz-ee8c40c2432f6d2d)
 
-running 3 tests
+running 4 tests
+test tests::regression_inputs_from_the_corpus ... ok
 test tests::seeds_exercise_the_parsers ... ok
 test tests::smoke_run_of_every_target ... ok
 test tests::write_corpus ... ok
 
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.19s
 
-     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_respond-f790d55c8c7da334)
+     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_respond-0c45106f741f08cc)
 
 running 42 tests
 test cleanup::tests::age_from_newest_keeps_a_file_that_is_still_read ... ok
@@ -320,26 +475,35 @@ test tests::throttle_lowers_priority ... ok
 test tests::unit_restarts_follow_the_configured_budget ... ok
 test tune::tests::apply_journal_persist_revert ... ok
 
-test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.12s
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.60s
 
-     Running tests/review_0_13.rs (/var/tmp/warden-lab-source-target/debug/deps/review_0_13-f341872e91d6c8be)
+     Running tests/review_0_13.rs (/var/tmp/warden-lab-source-target/debug/deps/review_0_13-ebfc75fe53929361)
 
 running 2 tests
 test a_dry_run_does_not_start_the_cooldown_of_the_real_action ... ok
 test a_refused_action_does_not_start_the_cooldown ... ok
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
 
-     Running tests/suspend.rs (/var/tmp/warden-lab-source-target/debug/deps/suspend-ec93d8a9028f5338)
+     Running tests/review_0_14.rs (/var/tmp/warden-lab-source-target/debug/deps/review_0_14-b26be6214863c950)
+
+running 3 tests
+test an_address_with_a_live_ssh_session_is_not_blocked_on_web_evidence ... ok
+test blocks_have_a_budget_of_their_own_and_containment_a_reserve ... ok
+test the_reserve_is_at_most_a_quarter_of_the_budget ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running tests/suspend.rs (/var/tmp/warden-lab-source-target/debug/deps/suspend-40314b39fb0e4b0e)
 
 running 1 test
 test a_cooldown_and_the_hourly_budget_run_on_while_the_machine_sleeps ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
 
-     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_sys-82934008eb00fd5c)
+     Running unittests src/lib.rs (/var/tmp/warden-lab-source-target/debug/deps/warden_sys-1aac20576e356f39)
 
-running 91 tests
+running 94 tests
 test cgroup::tests::containers ... ok
 test cgroup::tests::dir_mapping ... ok
 test cgroup::tests::memory_breakdown ... ok
@@ -379,8 +543,10 @@ test mem::tests::vmstat_parsing ... ok
 test mounts::tests::an_escape_above_255_is_text_not_an_overflow ... ok
 test mounts::tests::parses_mountinfo ... ok
 test mounts::tests::statvfs_root ... ok
+test net::tests::established_peers_by_local_port ... ok
 test net::tests::net_dev_parsing ... ok
 test net::tests::snmp_pairs ... ok
+test net::tests::sshd_ports_from_config ... ok
 test net::tests::tcp_table ... ok
 test pace::tests::a_busy_disk_spreads_the_work ... ok
 test pace::tests::a_disabled_pacer_never_sleeps ... ok
@@ -426,15 +592,16 @@ test sysctl::tests::keys_map_to_paths_and_reject_traversal ... ok
 test system::tests::kernel_versions ... ok
 test system::tests::loadavg_parsing ... ok
 test system::tests::stat_parsing ... ok
+test system::tests::steal_is_read_from_the_first_line ... ok
 test users::tests::lookups ... ok
 test users::tests::passwd_parsing ... ok
 test util::tests::kv_and_kb ... ok
 test util::tests::read_record_handles_short_and_long_files ... ok
 test util::tests::write_atomic_replaces_whole_files_and_leaves_nothing_behind ... ok
 
-test result: ok. 91 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 778.15s
+test result: ok. 94 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 783.02s
 
-     Running unittests src/main.rs (/var/tmp/warden-lab-source-target/debug/deps/wardenctl-b276b4b581fe1954)
+     Running unittests src/main.rs (/var/tmp/warden-lab-source-target/debug/deps/wardenctl-9fc4dcd5aada1a95)
 
 running 5 tests
 test tests::diagnoses_old_unit_sigsys_crash ... ok
@@ -445,9 +612,9 @@ test tests::pacing_line ... ok
 
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running unittests src/main.rs (/var/tmp/warden-lab-source-target/debug/deps/wardend-d0b7693ff2e01ce6)
+     Running unittests src/main.rs (/var/tmp/warden-lab-source-target/debug/deps/wardend-37afc3eb2b8f2063)
 
-running 31 tests
+running 32 tests
 test dryrun::tests::an_edit_of_the_configuration_wins_over_an_older_override ... ok
 test dryrun::tests::an_unwritable_state_dir_is_reported ... ok
 test dryrun::tests::override_survives_reload_and_restart ... ok
@@ -456,6 +623,7 @@ test engine::tests::a_condition_that_comes_back_after_its_resolution_is_recorded
 test engine::tests::containment_does_not_queue_behind_cleanups ... ok
 test engine::tests::engine_pipeline ... ok
 test engine::tests::result_events ... ok
+test engine::tests::the_dedup_table_is_bounded ... ok
 test eventlog::tests::a_failed_rotation_backs_off ... ok
 test eventlog::tests::a_partial_last_line_is_repaired_on_open ... ok
 test eventlog::tests::ids_resume_after_the_journal ... ok
@@ -480,36 +648,37 @@ test server::tests::exhaustion_is_recognised ... ok
 test server::tests::request_lines_are_bounded ... ok
 test tests::a_reload_names_the_settings_that_need_a_restart ... ok
 
-test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.97s
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.02s
 
-     Running tests/end_to_end.rs (/var/tmp/warden-lab-source-target/debug/deps/end_to_end-6f36943f912c4333)
+     Running tests/end_to_end.rs (/var/tmp/warden-lab-source-target/debug/deps/end_to_end-172dbff34ba7ab8e)
 
 running 2 tests
-test a_busy_executor_does_not_stall_control_health_or_shutdown ... 2026-10-25T21:26:06.479138Z ERROR backend failed 1 consecutive health checks: 127.0.0.1:36835: Connection refused (os error 111) kind=health.down id=1792963566476001 severity=critical subject=system
-2026-10-25T21:26:23.525172Z  WARN stopping with threads still busy components=[] responder_busy=true
+test a_busy_executor_does_not_stall_control_health_or_shutdown ... 2026-10-28T03:27:35.052913Z ERROR backend failed 1 consecutive health checks: 127.0.0.1:34591: Connection refused (os error 111) kind=health.down id=1793158055051001 severity=critical subject=system
+2026-10-28T03:27:52.020620Z  WARN stopping with threads still busy components=[] responder_busy=true
 ok
-test daemon_detects_and_remediates ... 2026-10-25T21:26:24.237419Z  WARN / is 84.9% full (1.6GiB free of 11.2GiB) kind=disk.space id=1792963583622001 subject=mount /
-2026-10-25T21:26:24.239971Z  WARN delete_old mount / → done: deleted 3 file(s), freed 12.0KiB kind=action.delete_old id=1792963583622002 subject=mount /
-2026-10-25T21:26:24.470787Z  WARN /boot is 5.6% full (1.7GiB free of 1.9GiB) kind=disk.space id=1792963583622003 subject=mount /boot
-2026-10-25T21:26:24.493613Z  WARN root executed /var/tmp/warden-lab-source-target/debug/deps/end_to_end-6f36943f912c4333 from a writable location kind=security.exec_from_writable id=1792963583622005 subject=process end_to_end-6f36[36671] user=root exe=/var/tmp/warden-lab-source-target/debug/deps/end_to_end-6f36943f912c4333
-2026-10-25T21:26:24.506939Z  WARN root executed /var/tmp/warden-lab-source-target/debug/wardend from a writable location kind=security.exec_from_writable id=1792963583622006 subject=process wardend[36685] user=root exe=/var/tmp/warden-lab-source-target/debug/wardend
-2026-10-25T21:26:24.519525Z  WARN limit "long sleeper": sleep[36683] running for 18s (limit 1s) kind=process.limit_exceeded id=1792963583622007 subject=process sleep[36683] user=root exe=/usr/bin/sleep
-2026-10-25T21:26:24.520730Z  WARN throttle sleep[36683] user=root exe=/usr/bin/sleep → done: 1 thread(s) set to nice 19 and idle I/O class; undo with `renice 0 -p 36683` kind=action.throttle id=1792963583622009 subject=process sleep[36683] user=root exe=/usr/bin/sleep
-2026-10-25T21:26:24.625373Z ERROR backend failed 2 consecutive health checks: 127.0.0.1:40727: Connection refused (os error 111) kind=health.down id=1792963583622011 severity=critical subject=system
-2026-10-25T21:26:24.682651Z  WARN SSH brute force from 192.0.2.99: 3 failures within 600s kind=security.ssh_bruteforce id=1792963583622013 subject=ip 192.0.2.99
-2026-10-25T21:26:24.683304Z  WARN exec sh → done: exit 0 (as nobody):  kind=action.exec id=1792963583622015 subject=system
-2026-10-25T21:26:24.689404Z  WARN 198.51.100.4: 2 requests blocked by ModSecurity within 600s — persistent attacker kind=security.waf_attack id=1792963583622017 subject=ip 198.51.100.4
-2026-10-25T21:26:25.716460Z  WARN limit "long sleeper": sleep[36701] running for 1s (limit 1s) kind=process.limit_exceeded id=1792963583622018 subject=process sleep[36701] user=root exe=/usr/bin/sleep
-2026-10-25T21:26:25.717438Z  WARN throttle sleep[36701] user=root exe=/usr/bin/sleep → done: 1 thread(s) set to nice 19 and idle I/O class; undo with `renice 0 -p 36701` kind=action.throttle id=1792963583622019 subject=process sleep[36701] user=root exe=/usr/bin/sleep
-2026-10-25T21:26:27.839292Z ERROR malicious code in site demo: /uploads/x.php (score 230: php-eval-decode, php-error-suppressed-eval, script-in-upload-dir) kind=security.webshell id=1792963583622022 severity=critical subject=file /tmp/.tmpQMDFHB/www/uploads/x.php (site demo)
-2026-10-25T21:26:27.840417Z  WARN quarantine /tmp/.tmpQMDFHB/www/uploads/x.php → done: quarantined as 1792963587839-8de42c6f9963 (restore: wardenctl quarantine restore 1792963587839-8de42c6f9963) kind=action.quarantine id=1792963583622023 subject=file /tmp/.tmpQMDFHB/www/uploads/x.php (site demo)
-2026-10-25T21:26:34.789308Z ERROR new SUID/SGID file: /tmp/.tmpQMDFHB/suidroot/rootme (mode 4755) kind=security.new_suid id=1792963583622025 severity=critical subject=file /tmp/.tmpQMDFHB/suidroot/rootme
-2026-10-25T21:26:35.099021Z  WARN detector tick was slow detector="integrity" took=5.193817443s
-2026-10-25T21:26:35.299476Z  WARN dry-run mode changed via control socket enabled=true source="override"
-2026-10-25T21:26:35.323168Z  WARN dry-run mode changed via control socket enabled=false source="config"
+test daemon_detects_and_remediates ... 2026-10-28T03:27:53.116410Z ERROR backend failed 2 consecutive health checks: 127.0.0.1:35255: Connection refused (os error 111) kind=health.down id=1793158072112001 severity=critical subject=system
+2026-10-28T03:27:53.197655Z  WARN exec sh → done: exit 0 (as nobody):  kind=action.exec id=1793158072112003 subject=system
+2026-10-28T03:27:53.320107Z  WARN / is 85.2% full (1.6GiB free of 11.2GiB) kind=disk.space id=1793158072112004 subject=mount /
+2026-10-28T03:27:53.324873Z  WARN delete_old mount / → done: deleted 3 file(s), freed 12.0KiB kind=action.delete_old id=1793158072112005 subject=mount /
+2026-10-28T03:27:53.530669Z  WARN /boot is 5.6% full (1.7GiB free of 1.9GiB) kind=disk.space id=1793158072112006 subject=mount /boot
+2026-10-28T03:27:53.560976Z  WARN root executed /var/tmp/warden-lab-source-target/debug/wardend from a writable location kind=security.exec_from_writable id=1793158072112008 subject=process wardend[67786] user=root exe=/var/tmp/warden-lab-source-target/debug/wardend
+2026-10-28T03:27:53.572986Z  WARN root executed /var/tmp/warden-lab-source-target/debug/deps/end_to_end-172dbff34ba7ab8e from a writable location kind=security.exec_from_writable id=1793158072112009 subject=process end_to_end-172d[67769] user=root exe=/var/tmp/warden-lab-source-target/debug/deps/end_to_end-172dbff34ba7ab8e
+2026-10-28T03:27:53.574052Z  WARN parent[67769] accumulated suspicion score 60: child:exec_from_writable, exec_from_writable kind=heuristics.suspicious id=1793158072112010 subject=process end_to_end-172d[67769] user=root exe=/var/tmp/warden-lab-source-target/debug/deps/end_to_end-172dbff34ba7ab8e
+2026-10-28T03:27:53.586424Z  WARN limit "long sleeper": sleep[67782] running for 18s (limit 1s) kind=process.limit_exceeded id=1793158072112011 subject=process sleep[67782] user=root exe=/usr/bin/sleep
+2026-10-28T03:27:53.588307Z  WARN throttle sleep[67782] user=root exe=/usr/bin/sleep → done: 1 thread(s) set to nice 19 and idle I/O class; undo with `renice 0 -p 67782` kind=action.throttle id=1793158072112013 subject=process sleep[67782] user=root exe=/usr/bin/sleep
+2026-10-28T03:27:54.169005Z  WARN SSH brute force from 192.0.2.99: 3 failures within 600s kind=security.ssh_bruteforce id=1793158072112015 subject=ip 192.0.2.99
+2026-10-28T03:27:54.275368Z  WARN 198.51.100.4: 2 requests blocked by ModSecurity within 600s — persistent attacker kind=security.waf_attack id=1793158072112019 subject=ip 198.51.100.4
+2026-10-28T03:27:55.093831Z ERROR malicious code in site demo: /uploads/x.php (score 230: php-eval-decode, php-error-suppressed-eval, script-in-upload-dir) kind=security.webshell id=1793158072112020 severity=critical subject=file /tmp/.tmpT3IhsO/www/uploads/x.php (site demo)
+2026-10-28T03:27:55.095049Z  WARN quarantine /tmp/.tmpT3IhsO/www/uploads/x.php → done: quarantined as 1793158075094-8de42c6f9963 (restore: wardenctl quarantine restore 1793158075094-8de42c6f9963) kind=action.quarantine id=1793158072112021 subject=file /tmp/.tmpT3IhsO/www/uploads/x.php (site demo)
+2026-10-28T03:27:56.268232Z  WARN limit "long sleeper": sleep[67816] running for 2s (limit 1s) kind=process.limit_exceeded id=1793158072112022 subject=process sleep[67816] user=root exe=/usr/bin/sleep
+2026-10-28T03:27:56.269063Z  WARN throttle sleep[67816] user=root exe=/usr/bin/sleep → done: 1 thread(s) set to nice 19 and idle I/O class; undo with `renice 0 -p 67816` kind=action.throttle id=1793158072112023 subject=process sleep[67816] user=root exe=/usr/bin/sleep
+2026-10-28T03:28:02.184559Z ERROR new SUID/SGID file: /tmp/.tmpT3IhsO/suidroot/rootme (mode 4755) kind=security.new_suid id=1793158072112025 severity=critical subject=file /tmp/.tmpT3IhsO/suidroot/rootme
+2026-10-28T03:28:02.432359Z  WARN detector tick was slow detector="integrity" took=5.2955844s
+2026-10-28T03:28:03.008551Z  WARN dry-run mode changed via control socket enabled=true source="override"
+2026-10-28T03:28:03.042306Z  WARN dry-run mode changed via control socket enabled=false source="config"
 ok
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.89s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.04s
 
    Doc-tests warden_core
 
@@ -543,8 +712,8 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 
 ==> Finished
-Source commit: 7b9e49ada42d31264e092785a4609e037f44948d
+Source commit: 2852c467c0eb8fa305003d73ee0e20815e5c596b
 Debian package still installed: 0.14.1-1
-Daemon service state after tests: active
-Full log: /var/log/warden-lab/source-tests/20261025T211155Z.log
+Daemon service state after tests: inactive
+Full log: /var/log/warden-lab/source-tests/20261028T031044Z.log
 Cargo target directory: /var/tmp/warden-lab-source-target

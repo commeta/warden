@@ -13,8 +13,11 @@
 //! * **path guards** — cleanup and quarantine never touch system locations.
 //!
 //! The executor ([`Responder`]) is owned by one thread and runs actions one
-//! at a time; a second lane ([`Responder::lane`]) on another thread shares
-//! its budgets and cooldowns, so containment never waits behind a cleanup.
+//! at a time; more lanes ([`Responder::lane`]) on other threads share its
+//! budgets and cooldowns. The daemon runs three: containment (kill, stop,
+//! freeze, quarantine, throttle), the network lane (`block_ip`, in batches:
+//! [`Responder::execute_blocks`]) and the slow one (restarts, cleanups,
+//! hooks), so a kill never waits behind a cleanup or a storm of blocks.
 //! What the control socket also needs (blocklist, quarantine, sysctl
 //! journal) lives in [`Handles`] with locks of its own, so an operator
 //! command never waits for a long action in progress.
@@ -34,6 +37,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use warden_core::config::ActionsConfig;
+use warden_core::net::Key;
 use warden_core::protect::{ProcAttrs, Protection};
 use warden_core::ratelimit::{Cooldown, SlidingWindow};
 use warden_core::sync::{lock, read, write};
@@ -80,20 +84,60 @@ pub struct Handles {
 }
 
 impl Handles {
-    fn new(cfg: &Config) -> Self {
+    fn new(cfg: &Config, backend: Arc<dyn firewall::Backend>) -> Self {
         Self {
-            firewall: Arc::new(Mutex::new(firewall::Firewall::new(&cfg.actions.firewall, &cfg.auth.allowlist))),
+            firewall: Arc::new(Mutex::new(firewall::Firewall::with_backend(
+                &cfg.actions.firewall,
+                &cfg.auth.allowlist,
+                backend,
+            ))),
             quarantine: Arc::new(RwLock::new(quarantine::Quarantine::new(&cfg.actions.quarantine_dir))),
             tuner: Arc::new(Mutex::new(tune::Tuner::new(&cfg.daemon.state_dir, cfg.tuning.persist))),
         }
     }
 
     /// Apply a new configuration in place (the objects are shared with the
-    /// control socket, so they are updated, not replaced).
+    /// control socket, so they are updated, not replaced). Every lane calls
+    /// this; the firewall keeps what it knows of the table unless its layout
+    /// changed.
     fn reconfigure(&self, cfg: &Config) {
-        *lock(&self.firewall) = firewall::Firewall::new(&cfg.actions.firewall, &cfg.auth.allowlist);
+        lock(&self.firewall).reconfigure(&cfg.actions.firewall, &cfg.auth.allowlist);
         *write(&self.quarantine) = quarantine::Quarantine::new(&cfg.actions.quarantine_dir);
         *lock(&self.tuner) = tune::Tuner::new(&cfg.daemon.state_dir, cfg.tuning.persist);
+    }
+}
+
+/// One `block_ip` step of an event, for the network lane
+/// ([`Responder::execute_blocks`]): its place in the playbook, its TTL and a
+/// slim copy of the event — what the checks and the result event need, not
+/// the messages and URIs of a WAF finding (thousands of these may wait).
+#[derive(Debug, Clone)]
+pub struct BlockJob {
+    pub index: usize,
+    pub ttl: Option<Duration>,
+    pub event: Event,
+}
+
+impl BlockJob {
+    pub fn of(ev: &Event, index: usize, ttl: Option<Duration>) -> Self {
+        let details = ["ip", "prefix", "log_source"]
+            .into_iter()
+            .filter_map(|k| ev.details.get(k).map(|v| (k.to_owned(), v.clone())))
+            .collect();
+        let event = Event {
+            id: ev.id,
+            ts_ms: ev.ts_ms,
+            kind: ev.kind.clone(),
+            severity: ev.severity,
+            source: ev.source.clone(),
+            title: ev.title.chars().take(240).collect(),
+            subject: ev.subject.clone(),
+            details,
+            fingerprint: ev.fingerprint.clone(),
+            actions: Vec::new(),
+            resolved: false,
+        };
+        Self { index, ttl, event }
     }
 }
 
@@ -139,6 +183,15 @@ fn target_key(ev: &Event) -> String {
         Subject::Process(p) => format!("pid:{}:{}", p.pid, p.start_time),
         other => other.to_string(),
     }
+}
+
+/// The address an IP action is about: the subject, else `details.ip`.
+fn event_ip(ev: &Event) -> Option<IpAddr> {
+    let ip = match &ev.subject {
+        Subject::Ip { addr } => Some(*addr),
+        _ => ev.details.get("ip").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()),
+    };
+    ip.map(warden_core::net::canonical)
 }
 
 fn ssh_ports(a: &ActionsConfig) -> Vec<u16> {
@@ -191,6 +244,11 @@ fn kill_one(spec: &ActionSpec, p: &ProcessRef, grace: Duration, rss: u64) -> Act
 
 impl Responder {
     pub fn new(cfg: &Config) -> Self {
+        Self::with_backend(cfg, Arc::new(firewall::Nft))
+    }
+
+    /// With another way to reach nftables (a stand-in in tests).
+    pub fn with_backend(cfg: &Config, backend: Arc<dyn firewall::Backend>) -> Self {
         let a = &cfg.actions;
         Self {
             cfg: a.clone(),
@@ -208,7 +266,7 @@ impl Responder {
             max_restarts: cfg.systemd.max_restarts_per_hour,
             quarantine_roots: cfg.fim.sites.iter().map(|s| s.root.clone()).collect(),
             command_user: cfg.daemon.command_user.clone(),
-            handles: Handles::new(cfg),
+            handles: Handles::new(cfg, backend),
         }
     }
 
@@ -217,10 +275,10 @@ impl Responder {
         self.handles.clone()
     }
 
-    /// Another executor for a second thread, sharing this one's budgets,
-    /// cooldowns, snapshot interval and handles. The daemon runs urgent
-    /// containment on one lane and slow actions on the other; every kill
-    /// goes to the same lane, so two kills still never race.
+    /// Another executor for another thread, sharing this one's budgets,
+    /// cooldowns, snapshot interval and handles. The daemon runs
+    /// containment, blocks and slow actions on lanes of their own; every
+    /// kill goes to the same lane, so two kills still never race.
     pub fn lane(&self) -> Self {
         Self {
             cfg: self.cfg.clone(),
@@ -257,11 +315,33 @@ impl Responder {
         self.handles.reconfigure(cfg);
     }
 
-    /// Execute all actions attached to an event, in order.
+    /// Execute all actions attached to an event, in order (`block_ip` too,
+    /// as a batch of one).
     pub fn execute(&mut self, ev: &Event, dry_run: bool, extras: &snapshot::Extras) -> Vec<ActionResult> {
+        self.execute_indexed(ev, dry_run, extras, false).into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// Execute an event's actions; each result with the position of its
+    /// action in the playbook. With `skip_blocks`, `block_ip` steps are left
+    /// out: the daemon has handed them to the network lane already.
+    pub fn execute_indexed(
+        &mut self,
+        ev: &Event,
+        dry_run: bool,
+        extras: &snapshot::Extras,
+        skip_blocks: bool,
+    ) -> Vec<(usize, ActionResult)> {
         let mut out = Vec::new();
         let stop_below = ev.details.get("stop_below_percent").and_then(|v| v.as_f64());
-        for spec in &ev.actions {
+        for (index, spec) in ev.actions.iter().enumerate() {
+            if let ActionSpec::BlockIp { ttl } = spec {
+                if !skip_blocks
+                    && let Some((_, r)) = self.execute_blocks(vec![BlockJob::of(ev, index, *ttl)], dry_run).pop()
+                {
+                    out.push((index, r));
+                }
+                continue;
+            }
             // Disk playbooks stop as soon as the target is reached.
             if spec.is_cleanup()
                 && let (Some(target), Subject::Mount { path, .. }) = (stop_below, &ev.subject)
@@ -269,11 +349,14 @@ impl Responder {
                 && u.used_percent() < target
                 && !dry_run
             {
-                out.push(ActionResult::new(
-                    spec,
-                    path.clone(),
-                    Status::Skipped,
-                    format!("usage {:.1}% already below {target}%", u.used_percent()),
+                out.push((
+                    index,
+                    ActionResult::new(
+                        spec,
+                        path.clone(),
+                        Status::Skipped,
+                        format!("usage {:.1}% already below {target}%", u.used_percent()),
+                    ),
                 ));
                 continue;
             }
@@ -284,20 +367,26 @@ impl Responder {
             // attempted: what a dry run would have done, or a step the budget
             // refused, must not hold back the next real occurrence.
             if spec.is_destructive() && lock(&self.limits).cooldown.cooling(&key, clock::now()) {
-                out.push(ActionResult::new(
-                    spec,
-                    target_key(ev),
-                    Status::Skipped,
-                    "cooldown: same action on the same target ran recently",
+                out.push((
+                    index,
+                    ActionResult::new(
+                        spec,
+                        target_key(ev),
+                        Status::Skipped,
+                        "cooldown: same action on the same target ran recently",
+                    ),
                 ));
                 continue;
             }
             if spec.is_destructive() && dry_run {
-                out.push(ActionResult::new(
-                    spec,
-                    target_key(ev),
-                    Status::DryRun,
-                    format!("dry-run: would {}", describe(spec, ev)),
+                out.push((
+                    index,
+                    ActionResult::new(
+                        spec,
+                        target_key(ev),
+                        Status::DryRun,
+                        format!("dry-run: would {}", describe(spec, ev)),
+                    ),
                 ));
                 continue;
             }
@@ -309,47 +398,211 @@ impl Responder {
             let reserved = if spec.is_destructive() {
                 let now = clock::now();
                 let mut l = lock(&self.limits);
-                let block = matches!(spec, ActionSpec::BlockIp { .. });
                 if let Some(why) = self.over_budget(&mut l, spec, now) {
                     drop(l);
-                    out.push(ActionResult::new(spec, target_key(ev), Status::Refused, why));
+                    out.push((index, ActionResult::new(spec, target_key(ev), Status::Refused, why)));
                     continue;
                 }
-                if block {
-                    l.blocks.record(now)
-                } else {
-                    l.budget.record(now)
-                }
-                Some((now, block))
+                l.budget.record(now);
+                Some(now)
             } else {
                 None
             };
             let r = self.run_one(spec, ev, extras);
-            if let Some((at, block)) = reserved {
+            if let Some(at) = reserved {
                 let mut l = lock(&self.limits);
                 if attempted(r.status) {
                     l.cooldown.arm(&key, clock::now());
-                } else if block {
-                    l.blocks.unrecord(at);
                 } else {
                     l.budget.unrecord(at);
                 }
             }
             tracing::info!(action = %r.action, target = %r.target, status = ?r.status, message = %r.message, event = %ev.kind, "action executed");
-            out.push(r);
+            out.push((index, r));
         }
         out
     }
 
-    /// Why the hour's budget refuses `spec` now, if it does. `block_ip`
-    /// has a budget of its own; of the shared one, the last
-    /// `containment_reserve` slots are for containment only.
-    fn over_budget(&self, l: &mut Limits, spec: &ActionSpec, now: Instant) -> Option<String> {
-        if matches!(spec, ActionSpec::BlockIp { .. }) {
-            let max = self.cfg.firewall.max_blocks_per_hour;
-            return (!l.blocks.peek(now))
-                .then(|| format!("circuit breaker: actions.firewall.max_blocks_per_hour ({max}) reached"));
+    /// Execute a batch of `block_ip` steps: the checks one by one (cooldown,
+    /// dry run, the hour's block budget, protected SSH sessions, the
+    /// allowlist), then every block that passed in one nft transaction.
+    /// Results come back in the order of `jobs`.
+    ///
+    /// An IPv6 address is blocked by its network ([`Key`], `ipv6_prefix`)
+    /// unless the network holds an allowlisted address or the address of an
+    /// established SSH session: then only the address itself, and the result
+    /// says why. Two jobs for the same target are one block (the longer TTL).
+    pub fn execute_blocks(&mut self, jobs: Vec<BlockJob>, dry_run: bool) -> Vec<(BlockJob, ActionResult)> {
+        struct Planned {
+            job: usize,
+            target: Key,
+            ttl: Duration,
+            cooldown: String,
+            reserved: Instant,
+            note: Option<String>,
         }
+        let now = clock::now();
+        let prefix = self.cfg.firewall.ipv6_prefix;
+        let mut results: Vec<Option<ActionResult>> = jobs.iter().map(|_| None).collect();
+        let mut planned: Vec<Planned> = Vec::new();
+        let mut by_target: HashMap<Key, usize> = HashMap::new();
+        for (i, job) in jobs.iter().enumerate() {
+            let spec = ActionSpec::BlockIp { ttl: job.ttl };
+            let ev = &job.event;
+            let Some(ip) = event_ip(ev) else {
+                results[i] =
+                    Some(ActionResult::new(&spec, ev.subject.to_string(), Status::Skipped, "no IP address in event"));
+                continue;
+            };
+            let key = Key::of(ip, prefix);
+            // whom a block takes (the network, or only the address)
+            let (target, note) = match self.block_target(ip, key, ev) {
+                Ok(t) => t,
+                Err((status, msg)) => {
+                    results[i] = Some(ActionResult::new(&spec, key.to_string(), status, msg));
+                    continue;
+                }
+            };
+            let cooldown = format!("{}@peer {target}", spec.cooldown_key());
+            if lock(&self.limits).cooldown.cooling(&cooldown, now) {
+                results[i] = Some(ActionResult::new(
+                    &spec,
+                    target.to_string(),
+                    Status::Skipped,
+                    "cooldown: same action on the same target ran recently",
+                ));
+                continue;
+            }
+            if dry_run {
+                let ttl = job.ttl.unwrap_or(self.cfg.firewall.default_ttl);
+                let why = note.as_ref().map(|n| format!(" ({n})")).unwrap_or_default();
+                results[i] = Some(ActionResult::new(
+                    &spec,
+                    target.to_string(),
+                    Status::DryRun,
+                    format!("dry-run: would block {target} for {}{why}", humantime::format_duration(ttl)),
+                ));
+                continue;
+            }
+            {
+                let mut l = lock(&self.limits);
+                if !l.blocks.peek(now) {
+                    let max = self.cfg.firewall.max_blocks_per_hour;
+                    results[i] = Some(ActionResult::new(
+                        &spec,
+                        target.to_string(),
+                        Status::Refused,
+                        format!("circuit breaker: actions.firewall.max_blocks_per_hour ({max}) reached"),
+                    ));
+                    continue;
+                }
+                l.blocks.record(now);
+            }
+            let ttl = job.ttl.unwrap_or(self.cfg.firewall.default_ttl);
+            if let Some(&j) = by_target.get(&target) {
+                let p = &mut planned[j];
+                p.ttl = p.ttl.max(ttl);
+                lock(&self.limits).blocks.unrecord(now);
+                results[i] = Some(ActionResult::new(
+                    &spec,
+                    target.to_string(),
+                    Status::Skipped,
+                    format!("merged into an earlier request to block {target} in the same batch"),
+                ));
+                continue;
+            }
+            by_target.insert(target, planned.len());
+            planned.push(Planned { job: i, target, ttl, cooldown, reserved: now, note });
+        }
+        if !planned.is_empty() {
+            let items: Vec<(Key, Duration)> = planned.iter().map(|p| (p.target, p.ttl)).collect();
+            let outcomes = lock(&self.handles.firewall).block_keys(&items);
+            let mut l = lock(&self.limits);
+            for (p, o) in planned.into_iter().zip(outcomes) {
+                let spec = ActionSpec::BlockIp { ttl: jobs[p.job].ttl };
+                let r = match o {
+                    Ok(m) => ActionResult::new(
+                        &spec,
+                        p.target.to_string(),
+                        Status::Done,
+                        match &p.note {
+                            Some(n) => format!("{m} ({n})"),
+                            None => m,
+                        },
+                    ),
+                    Err(firewall::BlockError::Refused(m)) => {
+                        ActionResult::new(&spec, p.target.to_string(), Status::Refused, m)
+                    }
+                    Err(firewall::BlockError::Failed(m)) => {
+                        ActionResult::new(&spec, p.target.to_string(), Status::Failed, m)
+                    }
+                };
+                if attempted(r.status) {
+                    l.cooldown.arm(&p.cooldown, now);
+                } else {
+                    l.blocks.unrecord(p.reserved);
+                }
+                results[p.job] = Some(r);
+            }
+        }
+        jobs.into_iter()
+            .zip(results)
+            .map(|(j, r)| {
+                let r = r.unwrap_or_else(|| {
+                    ActionResult::new(&ActionSpec::BlockIp { ttl: j.ttl }, "?", Status::Failed, "not attempted")
+                });
+                if r.status != Status::DryRun {
+                    tracing::debug!(action = %r.action, target = %r.target, status = ?r.status, message = %r.message, event = %j.event.kind, "action executed");
+                }
+                (j, r)
+            })
+            .collect()
+    }
+
+    /// What a block of `ip` (by its key `key`) really takes: the key, or
+    /// only the address when its network is shared with an allowlisted
+    /// address or an administrator's SSH session; or why nothing is blocked.
+    fn block_target(&self, ip: IpAddr, key: Key, ev: &Event) -> Result<(Key, Option<String>), (Status, String)> {
+        let narrow = |why: String| Ok((Key::exact(ip), Some(why)));
+        if self.cfg.firewall.protect_ssh_sessions {
+            let peers = self.ssh_peers();
+            if !trusted_ssh_evidence(ev) && peers.contains(&ip) {
+                return Err((
+                    Status::Refused,
+                    format!(
+                        "{ip} has an established SSH session to this host (actions.firewall.protect_ssh_sessions): \
+                         not blocked on {} evidence",
+                        if ev.source.is_empty() { "this" } else { ev.source.as_str() }
+                    ),
+                ));
+            }
+            if key.is_network()
+                && let Some(p) = peers.iter().find(|p| **p != ip && key.contains(p))
+            {
+                return narrow(format!(
+                    "only the address: {p} in {key} has an established SSH session (actions.firewall.protect_ssh_sessions)"
+                ));
+            }
+        }
+        let fw = lock(&self.handles.firewall);
+        if fw.is_allowlisted(&ip) {
+            return Err((Status::Refused, format!("{ip} is allowlisted")));
+        }
+        if key.is_network() && fw.allowlist_overlaps(&key) {
+            return narrow(format!("only the address: {key} holds allowlisted addresses"));
+        }
+        Ok((key, None))
+    }
+
+    /// Count the blocklist again (the network lane, once a minute).
+    pub fn reconcile_firewall(&self) -> Result<usize, String> {
+        lock(&self.handles.firewall).reconcile()
+    }
+
+    /// Why the hour's budget refuses `spec` now, if it does. Of the shared
+    /// budget, the last `containment_reserve` slots are for containment
+    /// only. (`block_ip` has a budget of its own: [`Responder::execute_blocks`].)
+    fn over_budget(&self, l: &mut Limits, spec: &ActionSpec, now: Instant) -> Option<String> {
         let max = self.cfg.max_actions_per_hour;
         let used = l.budget.count(now);
         if used >= max {
@@ -373,7 +626,11 @@ impl Responder {
             ActionSpec::FreezeCgroup | ActionSpec::KillCgroup => self.cgroup_action(spec, ev),
             ActionSpec::RestartUnit { unit } => self.restart_unit(spec, ev, unit.clone()),
             ActionSpec::Quarantine => self.do_quarantine(spec, ev),
-            ActionSpec::BlockIp { ttl } => self.block_ip(spec, ev, *ttl),
+            // a batch of its own (execute_indexed never gets here with one)
+            ActionSpec::BlockIp { ttl } => {
+                let mut r = self.execute_blocks(vec![BlockJob::of(ev, 0, *ttl)], false);
+                r.pop().map(|(_, r)| r).unwrap_or_else(|| ActionResult::new(spec, "?", Status::Failed, "not attempted"))
+            }
             ActionSpec::JournalVacuum { max_size, max_age } => {
                 cleanup_result(spec, ev, cleanup::journal_vacuum(max_size.map(|s| s.as_u64()), *max_age))
             }
@@ -821,49 +1078,22 @@ impl Responder {
         }
     }
 
-    fn block_ip(&mut self, spec: &ActionSpec, ev: &Event, ttl: Option<Duration>) -> ActionResult {
-        let ip: Option<IpAddr> = match &ev.subject {
-            Subject::Ip { addr } => Some(*addr),
-            _ => ev.details.get("ip").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()),
-        };
-        let Some(ip) = ip else {
-            return ActionResult::new(spec, ev.subject.to_string(), Status::Skipped, "no IP address in event");
-        };
-        let ip = warden_core::net::canonical(ip);
-        if self.cfg.firewall.protect_ssh_sessions && !trusted_ssh_evidence(ev) && self.has_ssh_session(ip) {
-            return ActionResult::new(
-                spec,
-                ip.to_string(),
-                Status::Refused,
-                format!(
-                    "{ip} has an established SSH session to this host (actions.firewall.protect_ssh_sessions): \
-                     not blocked on {} evidence",
-                    if ev.source.is_empty() { "this" } else { ev.source.as_str() }
-                ),
-            );
-        }
-        let blocked = lock(&self.handles.firewall).block(ip, ttl);
-        match blocked {
-            Ok(m) => ActionResult::new(spec, ip.to_string(), Status::Done, m),
-            // allowlisted, or `[actions.firewall] enabled = false`: refused by
-            // configuration, not a failure
-            Err(m) if m.contains("allowlisted") || m.contains("disabled in configuration") => {
-                ActionResult::new(spec, ip.to_string(), Status::Refused, m)
-            }
-            Err(m) => ActionResult::new(spec, ip.to_string(), Status::Failed, m),
-        }
-    }
-
-    /// Does `ip` have an established connection to a local SSH port? The
+    /// Addresses with an established connection to a local SSH port. The
     /// socket table is read at most once a second.
-    fn has_ssh_session(&self, ip: IpAddr) -> bool {
+    fn ssh_peers(&self) -> HashSet<IpAddr> {
         let mut l = lock(&self.limits);
         let fresh = l.ssh_peers.as_ref().is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(1));
         if !fresh {
             let peers = warden_sys::net::established_peers(&warden_sys::net::tcp_sockets(), &self.ssh_ports);
             l.ssh_peers = Some((Instant::now(), peers));
         }
-        l.ssh_peers.as_ref().is_some_and(|(_, p)| p.contains(&ip))
+        l.ssh_peers.as_ref().map(|(_, p)| p.clone()).unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    fn pretend_ssh_peers(&self, peers: &[&str]) {
+        lock(&self.limits).ssh_peers =
+            Some((Instant::now() + Duration::from_secs(3600), peers.iter().map(|p| p.parse().unwrap()).collect()));
     }
 
     fn exec(
@@ -938,9 +1168,14 @@ pub fn describe(spec: &ActionSpec, ev: &Event) -> String {
         ActionSpec::Stop => format!("SIGSTOP {}", ev.subject),
         ActionSpec::Quarantine => format!("quarantine {}", ev.subject),
         ActionSpec::BlockIp { ttl } => format!(
-            "block {} for {:?}",
-            ev.details.get("ip").and_then(|v| v.as_str()).map(str::to_owned).unwrap_or_else(|| ev.subject.to_string()),
-            ttl
+            "block {}{}",
+            ev.details
+                .get("prefix")
+                .or_else(|| ev.details.get("ip"))
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| ev.subject.to_string()),
+            ttl.map(|t| format!(" for {}", humantime::format_duration(t))).unwrap_or_default()
         ),
         ActionSpec::RestartUnit { unit } => {
             format!("restart {}", unit.clone().unwrap_or_else(|| ev.subject.to_string()))
@@ -1359,6 +1594,114 @@ mod tests {
         let _ = lock(&h.firewall).is_allowlisted(&"127.0.0.1".parse().unwrap());
         assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
         busy.join().unwrap();
+    }
+
+    fn block_job(ip: &str, source: &str) -> BlockJob {
+        let mut e = Event::new("security.waf_attack", Severity::Warning, "attacker")
+            .subject(Subject::Ip { addr: ip.parse().unwrap() })
+            .actions(vec![ActionSpec::BlockIp { ttl: Some(Duration::from_secs(600)) }]);
+        e.source = source.into();
+        BlockJob::of(&e, 0, Some(Duration::from_secs(600)))
+    }
+
+    fn fake_responder(cfg: impl FnOnce(&mut Config)) -> (Responder, Arc<firewall::fake::FakeNft>) {
+        let mut c = Config::default();
+        c.actions.firewall.protect_ssh_sessions = false;
+        cfg(&mut c);
+        let nft = Arc::new(firewall::fake::FakeNft::default());
+        (Responder::with_backend(&c, nft.clone()), nft)
+    }
+
+    /// N25 + N23 in the executor: IPv6 addresses are blocked by their /64,
+    /// requests for one target in a batch are one element, and the whole
+    /// batch is one nft transaction.
+    #[test]
+    fn blocks_go_in_one_transaction_and_ipv6_by_network() {
+        let (mut r, nft) = fake_responder(|_| {});
+        let jobs = vec![
+            block_job("2001:db8:aa:1::1", "waf"),
+            block_job("2001:db8:aa:1::2", "waf"),
+            block_job("203.0.113.5", "waf"),
+            block_job("2001:db8:aa:1::3", "waf"),
+            block_job("127.0.0.1", "waf"),
+        ];
+        let res = r.execute_blocks(jobs, false);
+        let st: Vec<(Status, &str)> = res.iter().map(|(_, r)| (r.status, r.target.as_str())).collect();
+        assert_eq!(
+            st,
+            [
+                (Status::Done, "2001:db8:aa:1::/64"),
+                (Status::Skipped, "2001:db8:aa:1::/64"),
+                (Status::Done, "203.0.113.5"),
+                (Status::Skipped, "2001:db8:aa:1::/64"),
+                (Status::Refused, "127.0.0.1"),
+            ]
+        );
+        assert!(res[1].1.message.contains("same batch"), "{}", res[1].1.message);
+        assert_eq!(nft.elements("blocklist6_64"), ["2001:db8:aa:1::"]);
+        assert_eq!(nft.elements("blocklist4"), ["203.0.113.5"]);
+        let adds = nft.scripts.lock().unwrap().iter().filter(|s| s.starts_with("add element")).count();
+        assert_eq!(adds, 1, "one transaction for the batch");
+        // the merged and refused requests did not use up the hour's block budget
+        assert_eq!(lock(&r.limits).blocks.count(clock::now()), 2);
+        // a second request for the network within the cooldown is skipped
+        let again = r.execute_blocks(vec![block_job("2001:db8:aa:1::99", "waf")], false);
+        assert_eq!(again[0].1.status, Status::Skipped);
+        assert!(again[0].1.message.contains("cooldown"));
+    }
+
+    /// The network of an allowlisted address, or of an administrator's SSH
+    /// session, is not blocked as a whole: only the attacking address is.
+    #[test]
+    fn a_shared_network_is_narrowed_to_the_address() {
+        let (mut r, nft) = fake_responder(|c| {
+            c.actions.firewall.allowlist.push("2001:db8:aa:1::10/128".into());
+            c.actions.firewall.protect_ssh_sessions = true;
+        });
+        r.pretend_ssh_peers(&["2001:db8:bb:1::22"]);
+        let res = r.execute_blocks(
+            vec![
+                block_job("2001:db8:aa:1::5", "waf"),
+                block_job("2001:db8:bb:1::6", "waf"),
+                block_job("2001:db8:bb:1::22", "waf"),
+                block_job("2001:db8:cc:1::7", "waf"),
+            ],
+            false,
+        );
+        let st: Vec<(Status, &str)> = res.iter().map(|(_, r)| (r.status, r.target.as_str())).collect();
+        assert_eq!(
+            st,
+            [
+                (Status::Done, "2001:db8:aa:1::5"),
+                (Status::Done, "2001:db8:bb:1::6"),
+                (Status::Refused, "2001:db8:bb:1::/64"),
+                (Status::Done, "2001:db8:cc:1::/64"),
+            ]
+        );
+        assert!(res[0].1.message.contains("holds allowlisted"), "{}", res[0].1.message);
+        assert!(res[1].1.message.contains("SSH session"), "{}", res[1].1.message);
+        assert!(res[2].1.message.contains("protect_ssh_sessions"), "{}", res[2].1.message);
+        assert_eq!(nft.elements("blocklist6"), ["2001:db8:aa:1::5", "2001:db8:bb:1::6"]);
+        assert_eq!(nft.elements("blocklist6_64"), ["2001:db8:cc:1::"]);
+        // SSH evidence from the journal blocks even an address with a session:
+        // the address, since its network holds the session
+        let mut ssh = block_job("2001:db8:bb:1::22", "auth");
+        ssh.event = ssh.event.clone().detail("log_source", "journal");
+        let (mut r2, _) = fake_responder(|c| c.actions.firewall.protect_ssh_sessions = true);
+        r2.pretend_ssh_peers(&["2001:db8:bb:1::22"]);
+        let res = r2.execute_blocks(vec![ssh], false);
+        assert_eq!((res[0].1.status, res[0].1.target.as_str()), (Status::Done, "2001:db8:bb:1::/64"));
+    }
+
+    #[test]
+    fn dry_run_blocks_nothing_and_says_what_it_would_block() {
+        let (mut r, nft) = fake_responder(|_| {});
+        let res = r.execute_blocks(vec![block_job("2001:db8:aa:1::1", "waf")], true);
+        assert_eq!(res[0].1.status, Status::DryRun);
+        assert_eq!(res[0].1.message, "dry-run: would block 2001:db8:aa:1::/64 for 10m");
+        assert_eq!(nft.applies(), 0);
+        // the dry run did not arm the cooldown or use the budget
+        assert_eq!(r.execute_blocks(vec![block_job("2001:db8:aa:1::1", "waf")], false)[0].1.status, Status::Done);
     }
 
     #[test]

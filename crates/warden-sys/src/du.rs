@@ -257,16 +257,40 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    /// Fixture trees go to tmpfs (`/dev/shm`) when it has room. Without
+    /// `fsync` the disk still costs: every `mkdir` and `create` on ext4
+    /// joins the journal transaction that another writer's `fsync` is
+    /// committing, and the 5 000-directory fixture took 90 s next to two
+    /// writers (T1). The walk does not care which filesystem it walks.
+    fn fixture() -> tempfile::TempDir {
+        const TMPFS_MAGIC: i64 = 0x0102_1994;
+        let shm = c"/dev/shm";
+        // SAFETY: zeroed statfs is a valid out-parameter.
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        // SAFETY: a NUL-terminated path and a valid out-pointer.
+        let ok = unsafe { libc::statfs(shm.as_ptr(), &mut st) } == 0
+            && st.f_type as i64 == TMPFS_MAGIC
+            && (st.f_bavail as u64).saturating_mul(st.f_bsize as u64) >= 256 << 20;
+        if ok && let Ok(d) = tempfile::tempdir_in("/dev/shm") {
+            return d;
+        }
+        tempfile::tempdir().unwrap()
+    }
+
+    /// No `fsync`: the walk counts allocated blocks, which ext4, XFS, btrfs
+    /// and tmpfs report for data still in the page cache (delayed
+    /// allocation reserves them). With one `fsync` per file the 3 000-file
+    /// fixtures took 13 minutes on a disk under load — 325 s for one test
+    /// (T1 of the 0.14.2 review).
     fn write(p: &Path, n: usize) {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         let mut f = std::fs::File::create(p).unwrap();
         f.write_all(&vec![0x5a; n]).unwrap();
-        f.sync_all().unwrap();
     }
 
     #[test]
     fn aggregates_by_level_and_counts_hard_links_once() {
-        let d = tempfile::tempdir().unwrap();
+        let d = fixture();
         let r = d.path();
         write(&r.join("big/a/blob"), 3 << 20);
         write(&r.join("big/b/blob"), 1 << 20);
@@ -295,7 +319,7 @@ mod tests {
 
     #[test]
     fn wide_trees_cost_no_memory_per_sibling_and_deep_ones_are_cut_off() {
-        let d = tempfile::tempdir().unwrap();
+        let d = fixture();
         // 3000 sibling directories, each with a file
         for i in 0..3000 {
             write(&d.path().join(format!("w{i:04}/f")), 4096);
@@ -317,7 +341,7 @@ mod tests {
 
     #[test]
     fn budgets_make_partial_reports() {
-        let d = tempfile::tempdir().unwrap();
+        let d = fixture();
         for i in 0..5000 {
             std::fs::create_dir_all(d.path().join(format!("d{}/{i}", i % 7))).unwrap();
         }
@@ -333,7 +357,7 @@ mod tests {
 
     #[test]
     fn a_paced_walk_finds_the_same() {
-        let d = tempfile::tempdir().unwrap();
+        let d = fixture();
         for i in 0..300 {
             write(&d.path().join(format!("d{}/f{i}", i % 3)), 4096);
         }
