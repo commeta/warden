@@ -1,0 +1,20 @@
+#!/usr/sbin/nft -f
+# Warden Lab Kit LAN mode.
+# Permit web front traffic only from trusted CIDRs on the selected NIC.
+# Untrusted access is dropped before conntrack's established-session accept.
+# Idempotent apply: remove only the Kit-owned table before recreating it.
+destroy table inet lab_filter
+table inet lab_filter {
+    chain input {
+        type filter hook input priority filter - 5; policy accept;
+        iifname "lo" accept
+        iifname "vh-*" accept
+@TRUSTED_ACCEPT@
+        # All remaining external requests to HTTP/HTTPS are denied.
+        tcp dport { @FRONT_PORTS@ } iifname != "lo" iifname != "vh-*" drop
+        # The edge-proxy backend and microservice listener ports are private.
+        tcp dport { @BACKEND_PORTS@ } iifname != "lo" iifname != "vh-*" drop
+        tcp dport { @SVC_PORTS@ } iifname != "lo" iifname != "vh-*" drop
+        ct state established,related accept
+    }
+}

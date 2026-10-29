@@ -1,0 +1,18 @@
+[Unit]
+Description=Warden Lab Kit nftables barrier (inet lab_filter)
+After=network-pre.target
+Before=network.target nginx.service apache2.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Load only our table; never the whole ruleset. Delete only our own stale
+# table first (ignored if absent), e.g. after a previous failed unit start.
+ExecStartPre=-/usr/sbin/nft delete table inet lab_filter
+ExecStart=/usr/sbin/nft -f /etc/warden-lab/lab_filter.nft
+ExecStop=/usr/sbin/nft delete table inet lab_filter
+ExecReload=/bin/sh -c '/usr/sbin/nft delete table inet lab_filter 2>/dev/null || true; exec /usr/sbin/nft -f /etc/warden-lab/lab_filter.nft'
+
+[Install]
+WantedBy=multi-user.target

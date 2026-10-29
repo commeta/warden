@@ -1,0 +1,16 @@
+#!/usr/sbin/nft -f
+# Warden Lab Kit barrier (inet lab_filter). This is NOT Warden's table
+# (inet warden); the kit never touches that one and never flushes the ruleset.
+# Local modes: lab service ports are reachable only from lo and the lab veths.
+# Idempotent apply: remove only the Kit-owned table before recreating it.
+destroy table inet lab_filter
+table inet lab_filter {
+    chain input {
+        type filter hook input priority filter - 5; policy accept;
+        iifname "lo" accept
+        iifname "vh-*" accept
+        ct state established,related accept
+        tcp dport { @FRONT_PORTS@ } iifname != "lo" iifname != "vh-*" drop
+        tcp dport { @SVC_PORTS@ } iifname != "lo" iifname != "vh-*" drop
+    }
+}

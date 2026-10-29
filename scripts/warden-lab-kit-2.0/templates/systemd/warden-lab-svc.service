@@ -1,0 +1,37 @@
+[Unit]
+Description=Warden Lab microservice: @NAME@
+After=network.target
+PartOf=warden-lab.target
+
+[Service]
+Slice=warden-lab.slice
+User=@USER@
+Group=@USER@
+Environment=LAB_SVC=@NAME@
+Environment=PORT=@ENVPORT@
+Environment=LAB_ROOT=@ROOT@
+WorkingDirectory=@ROOT@
+ExecStart=@EXEC@
+Restart=on-failure
+RestartSec=2
+
+# hardening (production reference): the service can only write its own dirs
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ReadWritePaths=@ROOT@/uploads @ROOT@/data
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

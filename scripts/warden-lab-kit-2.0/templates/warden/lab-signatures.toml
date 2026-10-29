@@ -1,0 +1,10 @@
+# Warden Lab Kit — a synthetic, benign webshell signature.
+# The FIM/quarantine tests drop a file containing the marker below; it is NOT
+# malware, it just scores high enough to trigger security.webshell and the
+# quarantine/restart path. This keeps the lab free of real malicious code.
+[[rule]]
+id = "warden-lab-webshell-marker"
+description = "Warden Lab synthetic webshell marker (benign test fixture)"
+score = 100
+pattern = '@MARKER@_[A-Z0-9]{8}'
+files = ["*.php", "*.phtml", "*.pht", "*.phar", "*.txt"]

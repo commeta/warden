@@ -1,0 +1,10 @@
+Warden Lab Kit 2.0 — this host is a lab/reference, not a general-purpose server.
+profile:   @PROFILE@
+front:     @FRONT@
+waf:       @WAF@
+sites:     @SITES@
+services:  @SERVICES@
+network:   @NET@
+
+Managed declaratively by labctl. Do not hand-edit the files it owns; change
+lab.toml and run 'sudo ./labctl apply'. 'sudo ./labctl reset' removes everything.

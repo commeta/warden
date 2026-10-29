@@ -1,0 +1,35 @@
+#!/usr/sbin/nft -f
+# Warden Lab Kit barrier (inet lab_filter) — external/production mode.
+# The front (80,443) is served on @IFACE@ to the world; the microservice
+# ports stay private (loopback and lab veths only). New HTTP connections are
+# rate-limited per source as a coarse backstop; Warden does the real blocking
+# in its own table (inet warden), which runs at a higher priority.
+# Idempotent apply: remove only the Kit-owned table before recreating it.
+destroy table inet lab_filter
+table inet lab_filter {
+    set conn_ratelimit4 {
+        type ipv4_addr
+        flags dynamic, timeout
+        timeout 1m
+    }
+    set conn_ratelimit6 {
+        type ipv6_addr
+        flags dynamic, timeout
+        timeout 1m
+    }
+    chain input {
+        type filter hook input priority filter - 5; policy accept;
+        iifname "lo" accept
+        iifname "vh-*" accept
+        # Only the selected NIC may receive web traffic, including established sessions.
+        tcp dport { @FRONT_PORTS@ } iifname != "@IFACE@" drop
+        # The edge-proxy backend and microservice ports are never public.
+        tcp dport { @BACKEND_PORTS@ } iifname != "lo" iifname != "vh-*" drop
+        tcp dport { @SVC_PORTS@ } iifname != "lo" iifname != "vh-*" drop
+        ct state established,related accept
+        # trusted admin/monitoring networks bypass the rate limit
+@TRUSTED_ACCEPT@
+        tcp dport { @FRONT_PORTS@ } ct state new update @@conn_ratelimit4 { ip saddr limit rate over 120/minute burst 60 packets } drop
+        tcp dport { @FRONT_PORTS@ } ct state new update @@conn_ratelimit6 { ip6 saddr limit rate over 120/minute burst 60 packets } drop
+    }
+}

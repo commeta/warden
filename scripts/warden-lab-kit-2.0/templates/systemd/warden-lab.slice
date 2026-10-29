@@ -1,0 +1,12 @@
+# The Warden Lab Kit runs its own build and test work under this slice so it
+# can be told apart from the services Warden watches (labctl report keys on
+# the cgroup path). Resource caps keep a stress run from starving the host.
+[Unit]
+Description=Warden Lab Kit work (builds, stress, tests)
+Before=slices.target
+
+[Slice]
+CPUWeight=30
+IOWeight=30
+MemoryHigh=2G
+TasksMax=4096

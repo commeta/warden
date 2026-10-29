@@ -1,0 +1,12 @@
+# Warden Lab Kit — Caddy edge in front of the nginx + ModSecurity 3 tier.
+{
+	admin off
+	auto_https off
+}
+:80, :443 {
+	tls @CERT@ @KEY@
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}
