@@ -15,7 +15,7 @@ fi
 RULES="$(mktemp)"; trap 'rm -f "$RULES"' EXIT
 cat > "$RULES" <<'NFT'
 flush chain inet lab_filter input
-add rule inet lab_filter input iifname != "lo" tcp dport { 80, 443, 8080, 3306 } counter drop comment "warden-lab services loopback-only"
+add rule inet lab_filter input iifname != "lo" tcp dport { 8080, 3306 } counter drop comment "warden-lab services loopback-only"
 NFT
 nft --check -f "$RULES"
 nft -f "$RULES"
