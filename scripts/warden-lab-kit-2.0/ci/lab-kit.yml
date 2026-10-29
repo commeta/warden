@@ -1,0 +1,73 @@
+# CI for the Warden Lab Kit 2.0. Place at .github/workflows/lab-kit.yml in a
+# checkout, or run the steps by hand. The static jobs need no root; the e2e
+# jobs need an ubuntu-24.04 runner with root and (for enforce) a disposable VM.
+name: lab-kit
+on:
+  push:
+    paths: ["scripts/warden-lab-kit-2.0/**"]
+  pull_request:
+    paths: ["scripts/warden-lab-kit-2.0/**"]
+
+defaults:
+  run:
+    working-directory: scripts/warden-lab-kit-2.0
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pipx install ruff && pip install pytest pytest-timeout
+      - name: ruff
+        run: ruff check lab/ tests/ labctl
+      - name: shellcheck templates & scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          # the kit ships almost no shell; lint what there is
+          find . -name '*.sh' -print0 | xargs -0 -r shellcheck -S warning || true
+      - name: unit tests (labctl logic, no root)
+        run: python3 -m pytest tests/unit -q
+      - name: plan every profile (no root)
+        run: for p in profiles/*.toml; do python3 labctl -p "$p" plan >/dev/null; done
+
+  e2e-nginx:
+    runs-on: ubuntu-24.04
+    needs: static
+    steps:
+      - uses: actions/checkout@v4
+      - name: apply ci-nginx-modsec3 and test
+        run: |
+          sudo cp profiles/ci-nginx-modsec3.toml lab.toml
+          sudo ./labctl apply
+          sudo ./labctl verify
+          sudo env LAB_PROFILE="$PWD/lab.toml" python3 -m pytest tests/lab -m "smoke or waf" -q
+          sudo ./labctl reset --yes
+
+  e2e-apache:
+    runs-on: ubuntu-24.04
+    needs: static
+    steps:
+      - uses: actions/checkout@v4
+      - name: apply apache-modsec2 and test
+        run: |
+          sudo cp profiles/apache-modsec2.toml lab.toml
+          sudo ./labctl apply
+          sudo env LAB_PROFILE="$PWD/lab.toml" python3 -m pytest tests/lab -m "smoke or waf" -q
+          sudo ./labctl reset --yes
+
+  # Nightly: every WAF mode on both engines. Install Warden from source and run
+  # the warden/enforce markers on a disposable VM (self-hosted, root).
+  nightly-modes:
+    if: github.event_name == 'schedule'
+    runs-on: [self-hosted, disposable]
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo cp profiles/ci-nginx-modsec3.toml lab.toml
+          for m in serial-native serial-json per-site concurrent-index concurrent-noindex error-log; do
+            sudo ./labctl --set waf.mode=$m apply
+            sudo env LAB_PROFILE="$PWD/lab.toml" python3 -m pytest tests/lab -m "waf or warden" -q
+          done
+          sudo ./labctl reset --yes
