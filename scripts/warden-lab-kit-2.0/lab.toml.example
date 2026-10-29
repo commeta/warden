@@ -1,0 +1,32 @@
+# Copy this valid example to lab.toml and adapt interface/client IP, or run ./install.sh.
+# VirtualBox example: enp0s8 is Host-Only and 192.168.56.1 is the host machine.
+# Do not keep these sample values unless they match your actual network.
+[lab]
+name = "lan-nginx-modsec3"
+front = "nginx"
+hostname = "lab.local"
+sites = ["portal", "wordpress", "opencart"]
+services = ["php-fpm", "node", "python-asgi"]
+databases = ["mariadb"]
+
+[net]
+mode = "lan"
+external_iface = "enp0s8"
+trusted = ["192.168.56.1/32"]
+v4_cidr = "10.77.0.0/24"
+v6_cidr = "fd77::/64"
+
+[waf]
+engine = "modsec3"
+mode = "serial-json"
+paranoia = 1
+
+[crs]
+source = "package"
+
+[warden]
+source = "release"
+version = "0.14.3"
+sha256 = "acc3e47112307cacdf4e025570f99e0afcc4131cf9e5395b554daaf68bc5470c"
+# First boot is observe-only; enforcement remains opt-in.
+enforce = false

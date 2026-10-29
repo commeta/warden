@@ -1,0 +1,34 @@
+# Lint config for the Warden Lab Kit's own Python (labctl + tests).
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "W", "UP", "B", "S"]
+ignore = [
+    "E501",   # long lines inside generated-config strings are fine
+    "S603",   # subprocess with an argv list is how we run every tool
+    "S607",   # partial executable paths (nginx, systemctl) are intentional
+    "S404",   # subprocess is used deliberately throughout
+    "B008",   # role defaults are simple lambdas
+]
+
+# The following are deliberate in a security test lab and reviewed:
+#   S101 asserts in tests; S103 explicit 0o750 lab modes; S104 the external
+#   front binds all interfaces by design; S105 a path constant, not a secret;
+#   S108 /tmp build caches; S110 best-effort cleanup; S323 the self-signed lab
+#   client; S608 the intentionally-injectable SQLi *target* in stress.py.
+[lint.per-file-ignores]
+"tests/**" = ["S101"]
+"lab/roles/base.py" = ["S105", "S108"]
+"lab/roles/warden.py" = ["S108"]
+"lab/roles/svc.py" = ["S108", "S103"]
+"lab/roles/app_php.py" = ["S103"]
+"lab/roles/tls.py" = ["S103"]
+"lab/roles/waf.py" = ["S103"]
+"lab/net.py" = ["S104"]
+"lab/stress.py" = ["S108", "S608"]
+"lab/roles/db.py" = ["S608"]
+"labctl" = ["UP036"]
+"lab/httpcli.py" = ["S323"]
+"lab/cli.py" = ["S110"]
+"lab/manifest.py" = ["S103"]
