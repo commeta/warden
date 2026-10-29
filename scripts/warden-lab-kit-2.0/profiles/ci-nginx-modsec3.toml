@@ -1,0 +1,26 @@
+# CI reference: nginx + ModSecurity 3 + CRS (package), a couple of PHP sites
+# and three microservices. Loopback so it runs on a plain CI runner.
+[lab]
+name = "ci-nginx-modsec3"
+front = "nginx"
+hostname = "lab.local"
+sites = ["portal", "wordpress", "opencart"]
+services = ["php-fpm", "node", "python-asgi"]
+databases = ["mariadb"]
+
+[net]
+mode = "loopback"
+
+[waf]
+engine = "modsec3"
+mode = "serial-json"
+paranoia = 1
+
+[crs]
+source = "package"
+
+[warden]
+source = "release"
+version = "0.14.3"
+sha256 = "acc3e47112307cacdf4e025570f99e0afcc4131cf9e5395b554daaf68bc5470c"
+enforce = false

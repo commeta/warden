@@ -1,0 +1,26 @@
+# Everything the kit can stand up: all fronts are mutually exclusive, so this
+# picks nginx+ModSecurity3 and enables every site and microservice.
+[lab]
+name = "full"
+front = "nginx"
+hostname = "lab.local"
+sites = ["portal", "wordpress", "modx", "opencart", "joomla", "drupal", "bitrix"]
+services = ["php-fpm", "node", "python-asgi", "python-wsgi", "go", "java", "ruby", "perl", "ws"]
+databases = ["mariadb", "redis"]
+
+[net]
+mode = "netns"
+
+[waf]
+engine = "modsec3"
+mode = "concurrent-index"
+paranoia = 2
+
+[crs]
+source = "package"
+
+[warden]
+source = "release"
+version = "0.14.3"
+sha256 = "acc3e47112307cacdf4e025570f99e0afcc4131cf9e5395b554daaf68bc5470c"
+enforce = false

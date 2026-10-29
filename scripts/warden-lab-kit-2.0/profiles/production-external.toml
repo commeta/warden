@@ -1,0 +1,42 @@
+# Reference example only — not a turnkey production deployment.
+# Before any public exposure, replace emulator sites with reviewed applications,
+# set the real interface/DNS/admin CIDRs and validate TLS/WAF/Warden policies.
+# Warden starts observe-only; enable enforce only after reviewing its events.
+[lab]
+name = "production"
+front = "nginx"
+hostname = "example.com"
+production = true
+sites = ["portal", "wordpress"]
+services = ["php-fpm", "node"]
+databases = ["mariadb", "redis"]
+
+[net]
+mode = "external"
+external_iface = "eth0"
+v4_cidr = "10.77.0.0/24"
+v6_cidr = "fd77::/64"
+trusted = ["203.0.113.0/24", "2001:db8:1::/48"]
+
+[tls]
+mode = "acme"
+domains = ["example.com", "wordpress.example.com"]
+acme_email = "admin@example.com"
+acme_staging = false
+
+[waf]
+engine = "modsec3"
+mode = "concurrent-index"
+paranoia = 2
+
+[crs]
+# Use the Ubuntu package by default for a reproducible, zero-input install.
+# Switch to source = "4.x" only after pinning a real digest with labctl crs-digest.
+source = "package"
+
+[warden]
+source = "release"
+version = "0.14.3"
+sha256 = "acc3e47112307cacdf4e025570f99e0afcc4131cf9e5395b554daaf68bc5470c"
+# Start in observe-only mode. Enable enforcement only after reviewing events.
+enforce = false

@@ -1,0 +1,25 @@
+# The classic stand: Apache prefork + mod_php + ModSecurity 2.9, serial native.
+[lab]
+name = "apache-modsec2"
+front = "apache-prefork"
+hostname = "lab.local"
+sites = ["portal", "wordpress", "modx"]
+services = ["node", "python-wsgi"]
+databases = ["mariadb"]
+
+[net]
+mode = "loopback"
+
+[waf]
+engine = "modsec2"
+mode = "serial-native"
+paranoia = 1
+
+[crs]
+source = "package"
+
+[warden]
+source = "release"
+version = "0.14.3"
+sha256 = "acc3e47112307cacdf4e025570f99e0afcc4131cf9e5395b554daaf68bc5470c"
+enforce = false

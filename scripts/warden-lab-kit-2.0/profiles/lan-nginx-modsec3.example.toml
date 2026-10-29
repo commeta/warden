@@ -1,0 +1,32 @@
+# Example for browser access from a trusted LAN.
+# BEFORE APPLYING: set external_iface to the server's real LAN NIC (see
+# `ip -br addr`) and trusted to your host machine's IP/CIDR. Avoid 0.0.0.0/0.
+[lab]
+name = "lan-nginx-modsec3"
+front = "nginx"
+hostname = "__LAB_HOSTNAME__"
+sites = ["portal", "wordpress", "opencart"]
+services = ["php-fpm", "node", "python-asgi"]
+databases = ["mariadb"]
+
+[net]
+mode = "lan"
+external_iface = "__LAN_INTERFACE__" # filled by install.sh
+trusted = [__TRUSTED_CIDRS__] # filled by install.sh; prefer one host /32
+v4_cidr = "10.77.0.0/24"
+v6_cidr = "fd77::/64"
+
+[waf]
+engine = "modsec3"
+mode = "serial-json"
+paranoia = 1
+
+[crs]
+source = "package"
+
+[warden]
+source = "release"
+version = "0.14.3"
+sha256 = "acc3e47112307cacdf4e025570f99e0afcc4131cf9e5395b554daaf68bc5470c"
+# Warden starts in dry-run/observe mode; no automatic remediation on first boot.
+enforce = false
