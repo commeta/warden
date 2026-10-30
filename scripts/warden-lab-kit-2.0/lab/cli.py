@@ -237,6 +237,16 @@ def cmd_test(args) -> int:
     if args.k:
         argv += ["-k", args.k]
     r = run(argv, check=False, env=env)
+    # util.run captures subprocess output; print it so `labctl test` shows the
+    # actual pytest summary and failure details instead of only the command.
+    if r.out:
+        sys.stdout.write(r.out)
+        if not r.out.endswith("\n"):
+            sys.stdout.write("\n")
+    if r.err:
+        sys.stderr.write(r.err)
+        if not r.err.endswith("\n"):
+            sys.stderr.write("\n")
     return r.code
 
 
