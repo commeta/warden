@@ -7,12 +7,11 @@ Wants=network-pre.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Load only our table; never the whole ruleset. The rules file begins with
-# `destroy table inet lab_filter`, which is idempotent even on first boot.
-# Avoid a separate pre-delete: nft emits a noisy error when the table is absent.
+# Load only our table; never the whole ruleset. The owned nft script uses
+# `destroy table`, which is idempotent when the table does not exist.
 ExecStart=/usr/sbin/nft -f /etc/warden-lab/lab_filter.nft
-ExecStop=-/usr/sbin/nft delete table inet lab_filter
-ExecReload=/usr/sbin/nft -f /etc/warden-lab/lab_filter.nft
+ExecStop=/usr/sbin/nft delete table inet lab_filter
+ExecReload=/bin/sh -c '/usr/sbin/nft delete table inet lab_filter 2>/dev/null || true; exec /usr/sbin/nft -f /etc/warden-lab/lab_filter.nft'
 
 [Install]
 WantedBy=multi-user.target

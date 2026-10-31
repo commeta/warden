@@ -21,6 +21,7 @@ import os
 import shutil
 
 from .. import layout, roles
+from ..fim import fim_include_globs
 from ..render import DirSpec, FileSpec, Plan, render_template
 from ..util import ensure_system_user, have, run, step, warn
 
@@ -61,6 +62,8 @@ def render(p, ctx) -> Plan:
     plan.dirs.append(DirSpec(SVC_ROOT, "root", "root", 0o755, "svc"))
     hc = ctx.data.setdefault("health_checks", [])
     web_users = ctx.data.setdefault("web_users", [])
+    fim = ctx.data.setdefault("fim_sites", [])
+    portal_access_log = (ctx.get("sites", {}).get("portal") or {}).get("access_log")
 
     for name in p.services:
         if name not in RUNTIMES:
@@ -72,6 +75,19 @@ def render(p, ctx) -> Plan:
         plan.dirs.append(DirSpec(root, "root", user, 0o750, "svc"))
         plan.dirs.append(DirSpec(f"{root}/uploads", user, user, 0o750, "svc"))
         plan.dirs.append(DirSpec(f"{root}/data", user, user, 0o750, "svc"))
+
+        restart_unit = "php8.3-fpm.service" if name == "php-fpm" else f"warden-lab-svc-{name}.service"
+        # Microservices are reverse-proxied from the portal vhost. Register
+        # their roots as distinct Warden FIM sites so uploads are monitored and
+        # access-log correlation resolves to the portal's request log.
+        fim.append({
+            "name": f"svc-{name}",
+            "root": root,
+            "access_log": portal_access_log,
+            "no_scripts": ["uploads/**"],
+            "include": fim_include_globs(),
+            "restart_unit": restart_unit,
+        })
 
         if name == "php-fpm":
             pool = render_template(
@@ -200,32 +216,58 @@ def shutil_which(x):
 
 
 def _own(root: str, user: str) -> None:
-    # owner = service user (the runtime reads/serves as owner), group www-data
-    # so the front (and php-fpm's www-data process group) can read it.
-    import grp
+    """Make deployed code immutable to the service; keep only data/uploads writable.
+
+    The service account's primary group receives read/execute access to the
+    code tree. The service itself owns the two explicitly mutable directories.
+    This avoids executing scripts from a directory the runtime can rewrite.
+    """
     import pwd
+    import stat
+
     try:
-        uid = pwd.getpwnam(user).pw_uid
-        gid = pwd.getpwnam(user).pw_gid
-        web_gid = grp.getgrnam("www-data").gr_gid
+        account = pwd.getpwnam(user)
+        uid = account.pw_uid
+        gid = account.pw_gid
     except KeyError:
         return
-    for dirpath, _dirs, files in os.walk(root):
-        os.chown(dirpath, uid, web_gid)
-        try:
+
+    writable_roots = {"uploads", "data"}
+
+    def writable_path(path: str) -> bool:
+        rel = os.path.relpath(path, root)
+        first = rel.split(os.sep, 1)[0]
+        return first in writable_roots
+
+    for dirpath, _dirs, files in os.walk(root, topdown=True, followlinks=False):
+        mutable = writable_path(dirpath)
+        if mutable:
+            os.chown(dirpath, uid, gid)
             os.chmod(dirpath, 0o750)
-        except OSError:
-            pass
-        for f in files:
-            fp = os.path.join(dirpath, f)
-            os.chown(fp, uid, web_gid)
-    for w in ("uploads", "data"):
-        wp = os.path.join(root, w)
-        if os.path.isdir(wp):
-            for dp, _d, fs in os.walk(wp):
-                os.chown(dp, uid, web_gid if w == "uploads" else gid)
-                for f in fs:
-                    os.chown(os.path.join(dp, f), uid, web_gid if w == "uploads" else gid)
+        else:
+            os.chown(dirpath, 0, gid)
+            os.chmod(dirpath, 0o750)
+
+        for name in files:
+            fp = os.path.join(dirpath, name)
+            try:
+                st = os.lstat(fp)
+            except FileNotFoundError:
+                continue
+            # Do not follow deployed symlinks when assigning ownership.
+            if stat.S_ISLNK(st.st_mode):
+                os.chown(fp, 0, gid, follow_symlinks=False)
+                continue
+            mutable_file = writable_path(fp)
+            if mutable_file:
+                os.chown(fp, uid, gid)
+                os.chmod(fp, 0o640)
+            else:
+                os.chown(fp, 0, gid)
+                # Preserve executable semantics for compiled apphosts/binaries,
+                # but never preserve write bits for group or other users.
+                mode = 0o750 if st.st_mode & 0o111 else 0o640
+                os.chmod(fp, mode)
 
 
 def verify(p, ctx):

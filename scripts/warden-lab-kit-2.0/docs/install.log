@@ -1,0 +1,318 @@
+warden@warden:~/warden-lab-kit-2.0$ sudo ./install.sh --profile lan --iface enp0s8 --trusted 192.168.56.1/32
+[sudo] password for warden: 
+Hit:1 http://ru.archive.ubuntu.com/ubuntu noble InRelease
+Hit:2 http://ru.archive.ubuntu.com/ubuntu noble-updates InRelease
+Hit:3 http://ru.archive.ubuntu.com/ubuntu noble-backports InRelease
+Hit:4 http://security.ubuntu.com/ubuntu noble-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+python3 is already the newest version (3.12.3-0ubuntu2.1).
+python3 set to manually installed.
+ca-certificates is already the newest version (20260816ubuntu0.24.04.1).
+ca-certificates set to manually installed.
+curl is already the newest version (8.5.0-2ubuntu10.16).
+curl set to manually installed.
+iproute2 is already the newest version (6.1.0-1ubuntu6.4).
+iproute2 set to manually installed.
+0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
+
+==> Selected profile:
+name = "lan-nginx-modsec3"
+front = "nginx"
+hostname = "lab.local"
+mode = "lan"
+external_iface = "enp0s8" # filled by install.sh
+trusted = ["192.168.56.1/32"] # filled by install.sh; prefer one host /32
+mode = "serial-json"
+source = "package"
+source = "release"
+version = "0.14.3"
+sha256 = "acc3e47112307cacdf4e025570f99e0afcc4131cf9e5395b554daaf68bc5470c"
+enforce = false
+
+==> Running dependency-aware plan and apply...
+profile    lan-nginx-modsec3
+front      nginx  (nginx 1.24 + ModSecurity 3)
+waf        modsec3 / serial-json  paranoia 1
+crs        package
+sites      portal, wordpress, opencart
+services   php-fpm, node, python-asgi
+databases  mariadb
+net        lan on enp0s8
+tls        self-signed
+warden     release 0.14.3
+mode       observe (dry_run=true)
+
+OK root  
+OK systemd  
+OK python3.12+  
+OK apt-get  
+==> front nginx: nginx 1.24 + ModSecurity 3
+==> nftables is not installed yet; labctl apply will install it
+profile    lan-nginx-modsec3
+front      nginx  (nginx 1.24 + ModSecurity 3)
+waf        modsec3 / serial-json  paranoia 1
+crs        package
+sites      portal, wordpress, opencart
+services   php-fpm, node, python-asgi
+databases  mariadb
+net        lan on enp0s8
+tls        self-signed
+warden     release 0.14.3
+mode       observe (dry_run=true)
+
+==> packages: ca-certificates curl iproute2 nftables openssl python3-pytest python3-pytest-timeout mariadb-server php8.3-mysql modsecurity-crs libnginx-mod-http-modsecurity libmodsecurity3 nginx php8.3-fpm php8.3-cli php8.3-sqlite3 nodejs sqlite3 python3
+==> would write/update 56 path(s), remove 0
+  · + /etc/warden-lab/
+  · + /run/warden-lab/
+  · + /var/log/warden-lab/
+  · + /var/www/warden-lab/
+  · + /etc/warden-lab/tls/
+  · + /etc/warden-lab/crs/
+  · + /etc/warden-lab/modsec/
+  · + /var/log/warden-lab/modsec/
+  · + /var/log/warden-lab/nginx/
+  · + /var/www/warden-lab/sites/
+  · + /var/www/warden-lab/services/
+  · + /var/log/warden-lab/modsec/sites/
+  · + /var/www/warden-lab/sites/portal/
+  · + /var/www/warden-lab/sites/wordpress/
+  · + /var/www/warden-lab/sites/opencart/
+  · + /var/www/warden-lab/services/php-fpm/
+  · + /var/www/warden-lab/services/node/
+  · + /var/www/warden-lab/services/python-asgi/
+  · + /var/log/warden-lab/modsec/sites/portal/
+  · + /var/log/warden-lab/modsec/sites/wordpress/
+  · + /var/log/warden-lab/modsec/sites/opencart/
+  · + /var/www/warden-lab/sites/portal/public/
+  · + /var/www/warden-lab/sites/portal/data/
+  · + /var/www/warden-lab/sites/wordpress/public/
+  · + /var/www/warden-lab/sites/wordpress/data/
+  · + /var/www/warden-lab/sites/opencart/public/
+  · + /var/www/warden-lab/sites/opencart/data/
+  · + /var/www/warden-lab/services/php-fpm/uploads/
+  · + /var/www/warden-lab/services/php-fpm/data/
+  · + /var/www/warden-lab/services/node/uploads/
+  · + /var/www/warden-lab/services/node/data/
+  · + /var/www/warden-lab/services/python-asgi/uploads/
+  · + /var/www/warden-lab/services/python-asgi/data/
+  · + /var/www/warden-lab/sites/portal/public/uploads/
+  · + /var/www/warden-lab/sites/wordpress/public/uploads/
+  · + /var/www/warden-lab/sites/opencart/public/uploads/
+  · + /etc/systemd/system/warden-lab.slice
+  · + /etc/warden-lab/labinfo.txt
+  · + /etc/warden-lab/lab_filter.nft
+  · + /etc/systemd/system/warden-lab-nftables.service
+  · + /etc/warden-lab/crs/crs-setup.conf
+  · + /etc/warden-lab/modsec/modsecurity.conf
+  · + /etc/warden-lab/modsec/main.conf
+  · + /etc/warden-lab/modsec/lab-exclusions.conf
+  · + /etc/nginx/conf.d/warden-lab.conf
+  · + /etc/php/8.3/fpm/pool.d/lab-portal.conf
+  · + /etc/php/8.3/fpm/pool.d/lab-wordpress.conf
+  · + /etc/php/8.3/fpm/pool.d/lab-opencart.conf
+  · + /etc/php/8.3/fpm/pool.d/lab-svc-php-fpm.conf
+  · + /etc/systemd/system/warden-lab-svc-node.service
+  · + /etc/systemd/system/warden-lab-svc-python-asgi.service
+  · + /etc/warden/conf.d/60-warden-lab.toml
+  · + /etc/warden/signatures.d/lab.toml
+  · + /etc/warden-lab/fim-bridge.json
+  · + /usr/local/libexec/warden-lab-fim-bridge.py
+  · + /etc/systemd/system/warden-lab-fim-bridge.service
+==> applying profile lan-nginx-modsec3
+==> installing 19 package(s)
+  · apt-get update -qq
+  · temporarily deferring package service starts until configuration is validated
+  · apt-get install -y --no-install-recommends ca-certificates curl iproute2 nftables openssl python3-pytest python3-pytest-timeout mariadb-server php8.3-mysql modsecurity-crs libnginx-mod-http-modsecurity libmodsecurity3 nginx php8.3-fpm php8.3-cli php8.3-sqlite3 nodejs sqlite3 python3
+  · openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/warden-lab/tls/privkey.pem -out /etc/warden-lab/tls/fullchain.pem -days 825 -subj /CN=lab.local -addext subjectAltName=DNS:lab.local,DNS:wordpress.lab.local,DNS:opencart.lab.local,DNS:localhost,IP:127.0.0.1
+  · systemctl daemon-reload
+  · validate: nft -c -f /etc/warden-lab/lab_filter.nft
+  · nft -c -f /etc/warden-lab/lab_filter.nft
+  · validate: nginx -t
+  · nginx -t
+  · systemctl restart warden-lab-nftables.service
+  · systemctl restart nginx.service
+  · systemctl restart php8.3-fpm.service
+==> wrote 55, removed 0, unchanged 0
+  · systemctl enable --now warden-lab-nftables.service
+  · mysql
+  · deployed site portal -> /var/www/warden-lab/sites/portal/public
+  · deployed site wordpress -> /var/www/warden-lab/sites/wordpress/public
+  · deployed site opencart -> /var/www/warden-lab/sites/opencart/public
+  · deployed service php-fpm -> /var/www/warden-lab/services/php-fpm
+  · deployed service node -> /var/www/warden-lab/services/node
+  · systemctl enable warden-lab-svc-node.service
+  · systemctl restart warden-lab-svc-node.service
+  · deployed service python-asgi -> /var/www/warden-lab/services/python-asgi
+  · systemctl enable warden-lab-svc-python-asgi.service
+  · systemctl restart warden-lab-svc-python-asgi.service
+  · temporarily deferring package service starts until configuration is validated
+  · download pinned Warden release 0.14.3
+  · curl --fail --location --silent --show-error --retry 3 --connect-timeout 15 --max-time 180 --proto =https --proto-redir =https --tlsv1.2 --output /var/tmp/warden-lab-release-xw3lfewp.deb https://github.com/commeta/warden/releases/download/0.14.3/warden_0.14.3-1_amd64.deb
+  · apt-get install -y --no-install-recommends /var/tmp/warden-lab-release-xw3lfewp.deb
+  · wardend --check-config --config /etc/warden/warden.toml
+  · systemctl daemon-reload
+  · systemctl enable wardend.service
+  · systemctl start wardend.service
+  · wardend.service enabled and active
+  · systemctl enable --now warden-lab-fim-bridge.service
+  · warden-lab-fim-bridge.service enabled and active
+==> restarted: warden-lab-nftables.service, nginx.service, php8.3-fpm.service
+OK profile lan-nginx-modsec3 applied
+OK [base] dir /etc/warden-lab
+OK [base] dir /var/log/warden-lab
+OK [base] dir /var/www/warden-lab
+OK [base] db secret root-only
+OK [net] nft table inet lab_filter
+OK [tls] tls cert present
+OK [db] mariadb reachable
+OK [crs] CRS rules present
+OK [waf] modsec main.conf
+OK [waf] waf audit log portal
+OK [waf] waf audit log wordpress
+OK [waf] waf audit log opencart
+OK [front] nginx -t
+OK [app_php] site portal index.php
+OK [app_php] site wordpress index.php
+OK [app_php] site opencart index.php
+OK [svc] svc node /health
+OK [svc] svc python-asgi /health
+OK [warden] drop-in present
+OK [warden] wardend installed
+OK [warden] wardend --check-config
+OK [warden] wardend.service active
+OK [warden] FIM upload bridge active
+OK all checks passed
+
+Installation complete.
+Add this to the HOST computer hosts file (replace SERVER_IP):
+  SERVER_IP lab.local wordpress.lab.local opencart.lab.local
+Then open: http://lab.local/
+LAN interface: enp0s8; trusted sources: 192.168.56.1/32
+Warden is pinned to 0.14.3 and remains in observe-only/dry-run mode.
+warden@warden:~/warden-lab-kit-2.0$ sudo wardend --check-config --config /etc/warden/warden.toml
+
+sudo systemctl status warden-lab-fim-bridge.service --no-pager
+sudo journalctl -u warden-lab-fim-bridge.service -n 50 --no-pager
+
+sudo wardenctl fim status
+sudo ./labctl verify
+sudo ./labctl test
+configuration OK
+  file: /etc/warden/warden.toml
+  file: /etc/warden/conf.d/60-warden-lab.toml
+  dry_run: true
+  memory: on  cpu: on  io: on  disk: on  limits: on  network: on  systemd: on  hardware: on  kernel: on
+  process: on  integrity: on  auth: on  fim: on (6 sites)  heuristics: on
+  policies: 0  notify: 0 webhook(s), telegram off, 0 command(s)
+● warden-lab-fim-bridge.service - Warden Lab upload FIM compatibility bridge (inotify to Warden scan)
+     Loaded: loaded (/etc/systemd/system/warden-lab-fim-bridge.service; enabled; preset: enabled)
+     Active: active (running) since Sat 2026-10-31 13:51:44 UTC; 3min 25s ago
+   Main PID: 18248 (python3)
+      Tasks: 1 (limit: 4597)
+     Memory: 9.0M (peak: 9.1M)
+        CPU: 138ms
+     CGroup: /system.slice/warden-lab-fim-bridge.service
+             └─18248 /usr/bin/python3 /usr/local/libexec/warden-lab-fim-bridge.py --config /etc/warden-lab/fim-bridge.json
+
+Oct 31 13:51:44 warden systemd[1]: Started warden-lab-fim-bridge.service - Warden Lab upload FIM compatibility bridge (inotify to Warden scan).
+Oct 31 13:51:44 warden python3[18248]: 2026-10-31 13:51:44,945 INFO watching 6 upload directories for 6 FIM sites (debounce 0.8s, min scan interval 3.0s)
+Oct 31 13:51:44 warden systemd[1]: Started warden-lab-fim-bridge.service - Warden Lab upload FIM compatibility bridge (inotify to Warden scan).
+Oct 31 13:51:44 warden python3[18248]: 2026-10-31 13:51:44,945 INFO watching 6 upload directories for 6 FIM sites (debounce 0.8s, min scan interval 3.0s)
+{
+  "realtime": {
+    "state": "running"
+  },
+  "signatures": 40,
+  "sites": [
+    {
+      "files": 4,
+      "flagged": [],
+      "last_scan": "2026-10-31T13:52:04Z",
+      "name": "portal",
+      "next_scan_in_seconds": 21414,
+      "paused_for_seconds": 0,
+      "root": "/var/www/warden-lab/sites/portal/public",
+      "scan_postponed_for_seconds": null
+    },
+    {
+      "files": 3,
+      "flagged": [],
+      "last_scan": "2026-10-31T13:52:04Z",
+      "name": "wordpress",
+      "next_scan_in_seconds": 21414,
+      "paused_for_seconds": 0,
+      "root": "/var/www/warden-lab/sites/wordpress/public",
+      "scan_postponed_for_seconds": null
+    },
+    {
+      "files": 3,
+      "flagged": [],
+      "last_scan": "2026-10-31T13:52:04Z",
+      "name": "opencart",
+      "next_scan_in_seconds": 21414,
+      "paused_for_seconds": 0,
+      "root": "/var/www/warden-lab/sites/opencart/public",
+      "scan_postponed_for_seconds": null
+    },
+    {
+      "files": 1,
+      "flagged": [],
+      "last_scan": "2026-10-31T13:52:04Z",
+      "name": "svc-php-fpm",
+      "next_scan_in_seconds": 21414,
+      "paused_for_seconds": 0,
+      "root": "/var/www/warden-lab/services/php-fpm",
+      "scan_postponed_for_seconds": null
+    },
+    {
+      "files": 1,
+      "flagged": [],
+      "last_scan": "2026-10-31T13:52:04Z",
+      "name": "svc-node",
+      "next_scan_in_seconds": 21414,
+      "paused_for_seconds": 0,
+      "root": "/var/www/warden-lab/services/node",
+      "scan_postponed_for_seconds": null
+    },
+    {
+      "files": 1,
+      "flagged": [],
+      "last_scan": "2026-10-31T13:52:05Z",
+      "name": "svc-python-asgi",
+      "next_scan_in_seconds": 21414,
+      "paused_for_seconds": 0,
+      "root": "/var/www/warden-lab/services/python-asgi",
+      "scan_postponed_for_seconds": null
+    }
+  ]
+}
+OK [base] dir /etc/warden-lab
+OK [base] dir /var/log/warden-lab
+OK [base] dir /var/www/warden-lab
+OK [base] db secret root-only
+OK [net] nft table inet lab_filter
+OK [tls] tls cert present
+OK [db] mariadb reachable
+OK [crs] CRS rules present
+OK [waf] modsec main.conf
+OK [waf] waf audit log portal
+OK [waf] waf audit log wordpress
+OK [waf] waf audit log opencart
+OK [front] nginx -t
+OK [app_php] site portal index.php
+OK [app_php] site wordpress index.php
+OK [app_php] site opencart index.php
+OK [svc] svc node /health
+OK [svc] svc python-asgi /health
+OK [warden] drop-in present
+OK [warden] wardend installed
+OK [warden] wardend --check-config
+OK [warden] wardend.service active
+OK [warden] FIM upload bridge active
+OK all checks passed
+  · pytest -q /home/warden/warden-lab-kit-2.0/tests/lab
+............ss.....                                                      [100%]
+17 passed, 2 skipped in 8.95s

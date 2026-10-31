@@ -59,12 +59,12 @@ Edge-фронты (HAProxy, Caddy) не несут своего WAF: они ст
 
 | Режим | Директивы ModSecurity | Что читает Warden |
 |---|---|---|
-| `serial-native` | `SecAuditLogType Serial`, нативный | `path=.../audit.log format=native` |
-| `serial-json` | `+ SecAuditLogFormat JSON` | `format=json` |
-| `per-site` | `SecAuditLog` на каждый vhost | `path=.../sites/*/audit.log site={1}` |
-| `concurrent-index` | `Concurrent` + индекс | `format=concurrent storage_dir=…` |
-| `concurrent-noindex` | `Concurrent`, Warden сканирует каталог | `path=<каталог> format=concurrent` |
-| `error-log` | `SecAuditEngine Off` | `path=<error.log> format=error_log` |
+| `serial-native` | `Serial`, отдельный `SecAuditLog` в каждом vhost | `path=.../sites/*/audit.log`, `format=native`, `site={1}` |
+| `serial-json` | `Serial` + `SecAuditLogFormat JSON`, отдельный файл в каждом vhost | `format=json`, имя сайта берётся из каталога vhost |
+| `per-site` | Нативный serial, отдельный `SecAuditLog` в каждом vhost | `path=.../sites/*/audit.log`, `site={1}` |
+| `concurrent-index` | `Concurrent`, отдельные index и storage directory в каждом vhost | отдельная `[[waf.log]]` с точным `index`, `storage_dir` и `site` на сайт |
+| `concurrent-noindex` | `Concurrent`, отдельные index/storage в каждом vhost | отдельная запись `[[waf.log]]` на storage directory каждого сайта |
+| `error-log` | `SecAuditEngine Off`, отдельный error-log каждого vhost | `path=.../*.error.log`, `format=error_log`, `site={1}` |
 
 CRS — пакетный 3.3.5 или закреплённый тег 4.x (`crs.ref` + `crs.sha256`;
 `labctl crs-digest <тег>` печатает хеш). Логика заголовка события в Warden

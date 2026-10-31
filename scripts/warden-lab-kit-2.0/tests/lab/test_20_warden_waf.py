@@ -20,6 +20,10 @@ def test_waf_hit_names_the_site(attacker, lab, journal, warden):
         pytest.skip("no Warden")
     site = next((s for s in lab.p.sites if s != "portal"), "portal")
     tag = journal.tag()
-    attacker.get(f"/lab/xss?q=%3Cscript%3E{tag}%3C/script%3E&t={tag}", host=lab.site_host(site))
-    ev = journal.expect("waf.hit", within=15)
-    assert "site" in ev.get("details", {})
+    # A unique peer avoids Warden's intentional <=1 waf.hit/minute dedup for
+    # a peer, while the URI tag ensures this event belongs to this test.
+    src = attacker.new_ipv4()
+    attacker.get(f"/lab/xss?q=%3Cscript%3E{tag}%3C/script%3E&t={tag}",
+                 host=lab.site_host(site), src=src)
+    ev = journal.expect("waf.hit", uri_contains=tag, within=15)
+    assert ev.get("details", {}).get("site") == site, ev

@@ -43,67 +43,78 @@ def packages(p) -> list[str]:
     return []
 
 
-def _audit_block(mode: str, worker_user: str) -> tuple[str, list[dict], dict]:
-    """Return (ModSecurity audit directives, warden [[waf.log]] list, descriptor)."""
+def _audit_block(mode: str, worker_user: str, front: str, sites: list[str]) -> tuple[str, list[dict], dict]:
+    """Return ModSecurity directives and Warden sources, scoped to vhosts.
+
+    Every supported audit mode uses a distinct per-vhost path. Serial formats
+    are read through one wildcard with the vhost directory captured as the
+    Warden site name. Concurrent modes get one index/storage pair per vhost,
+    while error-log mode reads each vhost's own server error log.
+    """
     parts = "ABIJDEFHZ"
     desc: dict = {"mode": mode}
-    if mode == "serial-native":
-        block = _serial(f"{AUD}/audit.log", parts, json=False)
-        logs = [{"path": f"{AUD}/audit.log", "format": "native", "site": "main"}]
-        desc.update(kind="file", path=f"{AUD}/audit.log")
-    elif mode == "serial-json":
-        block = _serial(f"{AUD}/audit.log", parts, json=True)
-        logs = [{"path": f"{AUD}/audit.log", "format": "json", "site": "main"}]
-        desc.update(kind="file", path=f"{AUD}/audit.log")
-    elif mode == "per-site":
-        # the front sets SecAuditLog per vhost; base only sets type+parts
-        block = (
-            "SecAuditEngine RelevantOnly\n"
-            "SecAuditLogType Serial\n"
-            f"SecAuditLogParts {parts}\n"
-            "# SecAuditLog is set per virtual host (one log per site)\n"
-        )
-        logs = [{"path": f"{AUD}/sites/*/audit.log", "format": "native", "site": "{1}"}]
-        desc.update(kind="per-site", dir=f"{AUD}/sites")
-    elif mode == "concurrent-index":
-        block = _concurrent(index=f"{AUD}/index", storage=f"{AUD}/data", parts=parts)
-        logs = [{"path": f"{AUD}/index", "format": "concurrent",
-                 "storage_dir": f"{AUD}/data", "site": "main"}]
-        desc.update(kind="concurrent", index=f"{AUD}/index", storage=f"{AUD}/data")
-    elif mode == "concurrent-noindex":
-        # ModSecurity still writes an index, but Warden is pointed at the
-        # storage directory and scans it (no index) — exercising that path.
-        block = _concurrent(index=f"{AUD}/index", storage=f"{AUD}/data", parts=parts)
-        logs = [{"path": f"{AUD}/data", "format": "concurrent", "site": "main"}]
-        desc.update(kind="concurrent", index=f"{AUD}/index", storage=f"{AUD}/data")
+    site_root = f"{AUD}/sites"
+    if mode in {"serial-native", "serial-json", "per-site"}:
+        json_mode = mode == "serial-json"
+        fmt = "json" if json_mode else "native"
+        block = _serial(None, parts, json=json_mode)
+        # Use explicit paths instead of a wildcard. Warden 0.14.3 can expand
+        # wildcard sources, but its offline doctor does not consistently mark
+        # these per-vhost serial logs as followed on a fresh install. Exact
+        # paths are unambiguous and retain the vhost -> FIM-site relationship.
+        logs = [
+            {"path": f"{site_root}/{site}/audit.log", "format": fmt, "site": site}
+            for site in sites
+        ]
+        desc.update(kind="per-site", dir=site_root, format=fmt)
+    elif mode in {"concurrent-index", "concurrent-noindex"}:
+        # ModSecurity's index and transaction storage are scoped per vhost.
+        # The noindex variant asks Warden to scan only each storage directory;
+        # ModSecurity still maintains its own index file for transaction writes.
+        block = _concurrent(parts=parts)
+        if mode == "concurrent-index":
+            logs = [
+                {"path": f"{site_root}/{site}/index", "format": "concurrent",
+                 "storage_dir": f"{site_root}/{site}/data", "site": site}
+                for site in sites
+            ]
+        else:
+            logs = [
+                {"path": f"{site_root}/{site}/data", "format": "concurrent", "site": site}
+                for site in sites
+            ]
+        desc.update(kind=mode, dir=site_root)
     elif mode == "error-log":
         block = "SecAuditEngine Off\n"
-        logs = [{"path": "@ERRORLOG@", "format": "error_log", "site": "main"}]
-        desc.update(kind="error-log")
+        log_root = "/var/log/warden-lab/apache" if front in {"apache-prefork", "apache-event"} else "/var/log/warden-lab/nginx"
+        logs = [
+            {"path": f"{log_root}/{site}.error.log", "format": "error_log", "site": site}
+            for site in sites
+        ]
+        desc.update(kind="error-log", path_glob=f"{log_root}/*.error.log")
     else:  # pragma: no cover - validated earlier
         raise AssertionError(mode)
     desc["worker"] = worker_user
     return block, logs, desc
 
 
-def _serial(path: str, parts: str, *, json: bool) -> str:
+def _serial(path: str | None, parts: str, *, json: bool) -> str:
     lines = [
         "SecAuditEngine RelevantOnly",
         "SecAuditLogType Serial",
-        f"SecAuditLog {path}",
         f"SecAuditLogParts {parts}",
     ]
+    if path:
+        lines.append(f"SecAuditLog {path}")
     if json:
         lines.append("SecAuditLogFormat JSON")
     return "\n".join(lines) + "\n"
 
 
-def _concurrent(*, index: str, storage: str, parts: str) -> str:
+def _concurrent(*, parts: str) -> str:
     return (
         "SecAuditEngine RelevantOnly\n"
         "SecAuditLogType Concurrent\n"
-        f"SecAuditLog {index}\n"
-        f"SecAuditLogStorageDir {storage}\n"
         f"SecAuditLogParts {parts}\n"
     )
 
@@ -121,13 +132,18 @@ def render(p, ctx) -> Plan:
         ctx.data["web_users"].append(worker)
 
     engine_state = "On"  # blocking; DetectionOnly is a per-test override
-    audit, logs, desc = _audit_block(p.waf.mode, worker)
+    audit, logs, desc = _audit_block(p.waf.mode, worker, p.front, list(p.sites))
     ctx.set("waf_audit", desc)
     ctx.set("waf_logs", logs)
 
     base = render_template("waf/modsecurity.conf", {"ENGINE": engine_state, "AUDIT": audit.rstrip()})
     plan.dirs.append(DirSpec(MODSEC_DIR, "root", "root", 0o755, "waf"))
     plan.dirs.append(DirSpec(AUD, "root", "adm", 0o750, "waf"))
+    if desc.get("kind") == "per-site":
+        audit_owner = "root" if p.front == "apache-prefork" else worker
+        plan.dirs.append(DirSpec(f"{AUD}/sites", audit_owner, "adm", 0o750, "waf"))
+    elif desc.get("kind") in {"concurrent-index", "concurrent-noindex"}:
+        plan.dirs.append(DirSpec(f"{AUD}/sites", worker, "adm", 0o750, "waf"))
     plan.files.append(FileSpec(f"{MODSEC_DIR}/modsecurity.conf", base, "root", "root", 0o644, "waf"))
 
     # unicode mapping the base conf references (shipped by both packages)
@@ -182,40 +198,64 @@ def post_apply(p, ctx) -> None:
     desc = ctx.get("waf_audit", {})
     worker = desc.get("worker", "www-data")
     os.makedirs(AUD, exist_ok=True)
+
     import grp
     import pwd
+
     def own(path, user, group, mode):
         try:
             os.chown(path, pwd.getpwnam(user).pw_uid, grp.getgrnam(group).gr_gid)
             os.chmod(path, mode)
         except KeyError:
             pass
-    kind = desc.get("mode")
-    if kind in {"serial-native", "serial-json"}:
-        path = desc["path"]
-        open(path, "a").close()
-        # Apache prefork (mod_security2) opens the serial log as root → keep it
-        # root:adm 0640 (not web-writable: a www-data log could be forged).
-        # nginx/event workers write it themselves → web-writable (Warden then
-        # flags log_trust, which is the realistic N5 case).
-        if p.front == "apache-prefork":
-            own(path, "root", "adm", 0o640)
-        else:
-            own(path, worker, "adm", 0o640)
+
+    kind = desc.get("kind")
+    if kind == "per-site":
+        site_root = desc["dir"]
+        # Apache prefork opens audit files in the privileged parent; nginx
+        # and Apache event workers write them as the web account.
+        log_user = "root" if p.front == "apache-prefork" else worker
+        os.makedirs(site_root, exist_ok=True)
+        own(site_root, log_user, "adm", 0o750)
+        for site in p.sites:
+            site_dir = os.path.join(site_root, site)
+            os.makedirs(site_dir, exist_ok=True)
+            log_path = os.path.join(site_dir, "audit.log")
+            open(log_path, "a", encoding="utf-8").close()
+            own(site_dir, log_user, "adm", 0o750)
+            own(log_path, log_user, "adm", 0o640)
     elif kind in {"concurrent-index", "concurrent-noindex"}:
-        os.makedirs(desc["storage"], exist_ok=True)
-        open(desc["index"], "a").close()
-        # the per-transaction files are written by workers — that is the
-        # tamper surface (MD5-in-index) the forgery tests exercise.
-        own(desc["storage"], worker, "adm", 0o750)
-        own(desc["index"], worker, "adm", 0o640)
-    elif kind == "per-site":
-        os.makedirs(f"{AUD}/sites", exist_ok=True)
-        own(f"{AUD}/sites", worker, "adm", 0o750)
+        site_root = desc["dir"]
+        os.makedirs(site_root, exist_ok=True)
+        own(site_root, worker, "adm", 0o750)
+        for site in p.sites:
+            site_dir = os.path.join(site_root, site)
+            data_dir = os.path.join(site_dir, "data")
+            os.makedirs(data_dir, exist_ok=True)
+            index_path = os.path.join(site_dir, "index")
+            open(index_path, "a", encoding="utf-8").close()
+            own(site_dir, worker, "adm", 0o750)
+            own(data_dir, worker, "adm", 0o750)
+            own(index_path, worker, "adm", 0o640)
+    # Error-log mode is provisioned by the front role, which owns each
+    # vhost's error log. No ModSecurity audit file needs pre-creation here.
 
 
 def verify(p, ctx):
     out = [("modsec main.conf", os.path.exists(f"{MODSEC_DIR}/main.conf"), "")]
+    desc = ctx.get("waf_audit", {})
+    kind = desc.get("kind")
+    if kind == "per-site":
+        for site in p.sites:
+            path = os.path.join(desc["dir"], site, "audit.log")
+            out.append((f"waf audit log {site}", os.path.isfile(path), path))
+    elif kind in {"concurrent-index", "concurrent-noindex"}:
+        for site in p.sites:
+            site_dir = os.path.join(desc["dir"], site)
+            index_path = os.path.join(site_dir, "index")
+            data_dir = os.path.join(site_dir, "data")
+            good = os.path.isfile(index_path) and os.path.isdir(data_dir)
+            out.append((f"waf concurrent storage {site}", good, site_dir))
     return out
 
 

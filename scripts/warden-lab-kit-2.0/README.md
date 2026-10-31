@@ -67,21 +67,33 @@ Warden закреплён на версии `0.14.3` и опубликованн
   Apache event + PHP-FPM, и edge-прокси HAProxy / Caddy перед WAF-уровнем
   nginx + ModSecurity 3 (проверяет цепочку X-Forwarded-For).
 - **6 режимов журнала ModSecurity**, которые читает Warden 0.14.3: serial
-  native, serial JSON, per-site, concurrent с индексом и без, только error-log.
-  `labctl apply --set waf.mode=…` переключает их на одном стенде.
+  native/JSON, per-site, concurrent с индексом и без, только error-log. Все
+  режимы формируют отдельные источники на каждый vhost с явными путями и
+  именем сайта (без wildcard-зависимости в drop-in); `labctl apply --set
+  waf.mode=…` переключает режим на одном стенде.
 - **Сайты-движки:** WordPress, MODX, OpenCart, Joomla, Drupal, 1C-Bitrix и
   портал. Каждый — свой пользователь, свой пул PHP-FPM, свой docroot, свой
   access-log (`site` в событиях Warden настоящий). Общий набор мишеней
   (`/lab/xss`, `/lab/sqli`, `/lab/traversal`, `/lab/upload`, …) и браузерные
   пакетные тесты на `/lab/batch`.
+- **FIM микросервисов:** каждый сервис зарегистрирован отдельным сайтом `svc-*`;
+  исходный код root-owned/read-only, запись разрешена только в `uploads/` и `data/`.
+  Для каждого сайта явно задаётся покрытие Warden 0.14.3, включая прямые и
+  вложенные PHP-family файлы в `uploads/`; фильтр сигнатуры работает по basename.
+  Дополнительный inotify bridge наблюдает writable `uploads/` и запускает штатный
+  `wardenctl fim scan <site>` как запасной путь, если запись из отдельного mount
+  view не доходит до mount-scoped realtime FIM. Он объединяет события и ограничивает
+  полные сканирования сайта одним разом в 3 секунды, не ослабляя unit sandbox.
 - **Микросервисы** по контракту (`/health`, `/echo`, `/item`, `/upload`,
   `/spawn`, `/sleep`, `/alloc`) на 9 рантаймах (Node, Python ASGI/WSGI, Go,
   Java, Ruby, Perl, PHP-FPM, WebSocket; .NET — опционально), каждый под своим
   пользователем и ужесточённым юнитом systemd, за `/svc/<имя>/` через WAF.
 - **Сеть:** loopback (только локально), LAN (веб-фронт доступен с выбранного интерфейса только доверенным CIDR), netns (клиент и атакующий в своих namespace, настоящий дроп Warden не на `lo`, ротация IPv6 /64), external (production: фронт на реальном интерфейсе, новые подключения ограничиваются по скорости, сервисные порты закрыты).
 - **Генерация drop-in Warden** из профиля: `[[waf.log]]` под режим,
-  `process.web_users`, `[[fim.site]]`, `[[health.check]]`, allowlist,
-  `ipv6_prefix`. Синтетическая (безвредная) сигнатура вебшелла для тестов FIM.
+  `process.web_users`, `[[fim.site]]` с явными масками `include`,
+  `[[health.check]]`, allowlist, `ipv6_prefix`. Для WAF отключено доверие к
+  автоматически блокирующим решениям на основании журналов, доступных на запись
+  веб-пользователю (`waf.trust_writable_logs = false`).
 - **Внешние тесты** (pytest, чёрный ящик): `smoke`, `waf`, `warden`, `enforce`,
   `ipv6`, `forgery`, `fim`, `spawn`, `health`. Каждый запрос несёт `t=<uuid>`,
   и событие ищется по нему — тест нельзя пройти на вчерашних событиях (L3).

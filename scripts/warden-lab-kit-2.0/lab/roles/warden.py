@@ -14,9 +14,11 @@ block in a test — or in production — can never lock the operator out.
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import tempfile
+from pathlib import Path
 
 from .. import net as netmod
 from .. import roles
@@ -26,6 +28,9 @@ from ..util import defer_service_starts, die, have, run, sha256_file, step, warn
 WARDEN_ETC = "/etc/warden"
 DROPIN = f"{WARDEN_ETC}/conf.d/60-warden-lab.toml"
 SIGS = f"{WARDEN_ETC}/signatures.d/lab.toml"
+FIM_BRIDGE_CONFIG = "/etc/warden-lab/fim-bridge.json"
+FIM_BRIDGE_SCRIPT = "/usr/local/libexec/warden-lab-fim-bridge.py"
+FIM_BRIDGE_UNIT = "/etc/systemd/system/warden-lab-fim-bridge.service"
 WEBSHELL_MARKER = "WARDEN_LAB_WEBSHELL_MARKER"
 
 
@@ -64,6 +69,7 @@ def render(p, ctx) -> Plan:
     fim_sites = ctx.get("fim_sites", [])
     health = ctx.get("health_checks", [])
     err_log = ctx.get("waf_error_log", "/var/log/warden-lab/nginx/portal.error.log")
+    err_log_glob = ctx.get("waf_error_log_glob", err_log)
 
     allow = list(dict.fromkeys(ep.trusted + [ep.cli_v4, ep.cli_v6]))
     lines: list[str] = []
@@ -88,9 +94,12 @@ def render(p, ctx) -> Plan:
     lines.append("")
 
     # WAF logs for the selected mode
-    lines += ["[waf]", "enabled = true", "discover = false", ""]
+    # Nginx/ModSecurity writes audit logs as www-data. Keep ingesting those
+    # logs, but do not let a web-writable log alone authorize automatic IP
+    # blocking: a compromised worker could forge source addresses.
+    lines += ["[waf]", "enabled = true", "discover = false", "trust_writable_logs = false", ""]
     for wl in waf_logs:
-        path = wl["path"].replace("@ERRORLOG@", err_log)
+        path = wl["path"].replace("@ERRORLOG@", err_log).replace("@ERRORLOG_GLOB@", err_log_glob)
         lines.append("[[waf.log]]")
         lines.append(f"path = {_tstr(path)}")
         lines.append(f"format = {_tstr(wl.get('format', 'auto'))}")
@@ -107,6 +116,8 @@ def render(p, ctx) -> Plan:
         lines.append(f"root = {_tstr(s['root'])}")
         if s.get("access_log"):
             lines.append(f"access_log = {_tstr(s['access_log'])}")
+        if s.get("include"):
+            lines.append(f"include = {_tarr(s['include'])}")
         if s.get("no_scripts"):
             lines.append(f"no_scripts = {_tarr(s['no_scripts'])}")
         if s.get("restart_unit"):
@@ -142,6 +153,31 @@ def render(p, ctx) -> Plan:
         FileSpec(SIGS, render_template("warden/lab-signatures.toml", {"MARKER": WEBSHELL_MARKER}),
                  "root", "root", 0o640, "warden")
     )
+
+    # Warden 0.14.3's fanotify FIM uses FAN_MARK_MOUNT. Ubuntu's PHP-FPM
+    # service and our hardened microservice units create private mount
+    # namespaces, so writes made through those namespace-local mount copies
+    # may not reach the daemon's mount marks. Watch only the writable upload
+    # trees with inode-based inotify and ask Warden to run its own site scan.
+    # This preserves the service mount sandboxes instead of weakening them.
+    if p.warden.source != "none" and fim_sites:
+        bridge_sites = [
+            {"name": s["name"], "upload_root": os.path.join(s["root"], "uploads")}
+            for s in fim_sites
+        ]
+        bridge_config = json.dumps(
+            {"debounce_seconds": 0.8, "min_scan_interval_seconds": 3.0, "sites": bridge_sites},
+            ensure_ascii=True, indent=2,
+        ) + "\n"
+        plan.files.append(FileSpec(FIM_BRIDGE_CONFIG, bridge_config, "root", "root", 0o640, "warden"))
+        bridge_script = (Path(__file__).resolve().parents[1] / "fim_bridge.py").read_text(encoding="utf-8")
+        plan.files.append(FileSpec(FIM_BRIDGE_SCRIPT, bridge_script, "root", "root", 0o755, "warden"))
+        bridge_unit = render_template(
+            "systemd/warden-lab-fim-bridge.service",
+            {"SCRIPT": FIM_BRIDGE_SCRIPT, "CONFIG": FIM_BRIDGE_CONFIG},
+        )
+        plan.files.append(FileSpec(FIM_BRIDGE_UNIT, bridge_unit, "root", "root", 0o644, "warden"))
+
     ctx.set("warden_dropin", content)
     return plan
 
@@ -185,6 +221,27 @@ def post_apply(p, ctx) -> None:
                 die("wardend.service did not become active after installation:\n" + (logs.out or logs.err))
             step("wardend.service enabled and active")
 
+        # Start/restart the upload inotify bridge only after the Warden socket
+        # is available. It does not replace fanotify; it closes the namespace
+        # visibility gap for writable uploads using Warden's normal FIM scan.
+        bridge_configured = os.path.isfile(FIM_BRIDGE_CONFIG) and os.path.isfile(FIM_BRIDGE_SCRIPT)
+        if src != "none" and have("systemctl") and bridge_configured:
+            active = run(["systemctl", "is-active", "--quiet", "warden-lab-fim-bridge.service"],
+                         check=False, quiet=True)
+            if active.ok:
+                run(["systemctl", "restart", "warden-lab-fim-bridge.service"])
+            else:
+                run(["systemctl", "enable", "--now", "warden-lab-fim-bridge.service"])
+            state = run(["systemctl", "is-active", "warden-lab-fim-bridge.service"],
+                        check=False, quiet=True)
+            if not state.ok or state.out.strip() != "active":
+                logs = run(["journalctl", "-u", "warden-lab-fim-bridge.service", "-n", "40", "--no-pager"],
+                           check=False, quiet=True)
+                die("warden-lab-fim-bridge.service did not become active:\n" + (logs.out or logs.err))
+            step("warden-lab-fim-bridge.service enabled and active")
+
+    if src == "none" and have("systemctl"):
+        run(["systemctl", "disable", "--now", "warden-lab-fim-bridge.service"], check=False, quiet=True)
 
 def release_url(version: str) -> str:
     """Return the immutable release asset URL for the pinned Debian package."""
@@ -280,6 +337,11 @@ def verify(p, ctx):
         if p.warden.source != "none" and have("systemctl"):
             active = run(["systemctl", "is-active", "wardend.service"], check=False, quiet=True)
             out.append(("wardend.service active", active.ok and active.out.strip() == "active", active.out.strip()))
+            if p.warden.source != "none" and os.path.isfile(FIM_BRIDGE_UNIT):
+                bridge = run(["systemctl", "is-active", "warden-lab-fim-bridge.service"],
+                             check=False, quiet=True)
+                out.append(("FIM upload bridge active", bridge.ok and bridge.out.strip() == "active",
+                            bridge.out.strip()))
     return out
 
 

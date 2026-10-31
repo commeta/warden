@@ -13,7 +13,7 @@
 | `test_20_warden_waf` | warden | `waf.hit`/`security.waf_attack` по адресу, `site` в событии |
 | `test_25_ipv6` | ipv6 | ротация внутри одной /64 → один блок `…/64` (N25) |
 | `test_30_enforce` | enforce | настоящий блок атакующего, клиент работает, unblock |
-| `test_40_fim` | fim | вебшелл в `uploads/` → `security.webshell` |
+| `test_40_fim` | fim | вебшелл в `uploads/` → `security.webshell` | Включая `svc-*` microservice roots.
 | `test_45_spawn` | spawn | `/spawn` рантайма → `security.web_spawn` его пользователя |
 | `test_50_forgery` | forgery | подделанная запись не блокирует чужой адрес (N4/N5) |
 | `test_70_health` | health | health-проверки настроены на сервисы и БД |

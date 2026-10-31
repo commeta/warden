@@ -7,4 +7,6 @@ id = "warden-lab-webshell-marker"
 description = "Warden Lab synthetic webshell marker (benign test fixture)"
 score = 100
 pattern = '@MARKER@_[A-Z0-9]{8}'
+# Warden 0.14.3 matches `files` against the basename, not the relative path.
+# These patterns therefore apply equally to root files and nested uploads/.
 files = ["*.php", "*.phtml", "*.pht", "*.phar", "*.txt"]

@@ -13,6 +13,9 @@ class Warden:
     def status(self):
         return wardenctl.status()
 
+    def fim_status(self):
+        return wardenctl.fim_status()
+
     def events(self, since_id=0, min_severity=None):
         return wardenctl.events(since_id=since_id, min_severity=min_severity)
 

@@ -11,12 +11,12 @@ AUD = "/var/log/warden-lab/modsec"
 
 def saw_request(mode: str, tag: str) -> bool:
     """Did ModSecurity record a transaction whose URI carries this tag?"""
-    if mode in ("serial-native", "serial-json"):
-        return _grep(f"{AUD}/audit.log", tag)
-    if mode == "per-site":
+    if mode in ("serial-native", "serial-json", "per-site"):
         return any(_grep(p, tag) for p in glob.glob(f"{AUD}/sites/*/audit.log"))
     if mode in ("concurrent-index", "concurrent-noindex"):
-        for root, _d, files in os.walk(f"{AUD}/data"):
+        for root, _d, files in os.walk(f"{AUD}/sites"):
+            if os.path.basename(root) != "data":
+                continue
             for f in files:
                 if _grep(os.path.join(root, f), tag):
                     return True

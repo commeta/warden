@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# First-run installer for Warden Lab Kit 2.0.1 on Ubuntu Server 24.04.
+# First-run installer for Warden Lab Kit 2.0.5 on Ubuntu Server 24.04.
 # Installs the LAN profile by default, with an explicit interface/allowlist.
 set -Eeuo pipefail
 
@@ -11,7 +11,7 @@ HOSTNAME="lab.local"
 
 usage() {
   cat <<'EOF'
-Warden Lab Kit 2.0.1 installer
+Warden Lab Kit 2.0.5 installer
 
 Usage:
   sudo ./install.sh --profile lan --iface enp0s8 --trusted 192.168.56.1/32

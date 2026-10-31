@@ -8,7 +8,7 @@ as that user over a unix socket. The site code is the shared emulator in
 is attributed to that site and that user.
 
 The role fills in the per-site user / restart unit for the Warden drop-in and
-declares each site as a FIM site (root, access log, no-scripts uploads).
+declares each site as a FIM site with explicit script coverage and no-scripts uploads.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import os
 import shutil
 
 from .. import layout, roles
+from ..fim import fim_include_globs
 from ..render import DirSpec, FileSpec, Plan, render_template
 from ..util import ensure_system_user, run, step
 
@@ -89,6 +90,7 @@ def render(p, ctx) -> Plan:
                 "root": f"{root}/public",
                 "access_log": meta.get("access_log"),
                 "no_scripts": ["uploads/**"],
+                "include": fim_include_globs(),
                 "restart_unit": meta["restart_unit"],
             }
         )

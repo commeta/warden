@@ -218,11 +218,19 @@ def _nginx(p, ctx, plan, *, internal: bool) -> None:
         php = _nginx_php_location(layout.site_fpm_sock(s))
         this_svc = svc if is_portal else "        # /svc proxies live on the portal vhost"
         per_site_audit = ""
-        if p.waf.mode == "per-site" and modsec == "on":
+        if modsec == "on" and p.waf.mode in {"serial-native", "serial-json", "per-site"}:
             per_site_audit = (
                 f"\n    modsecurity_rules 'SecAuditLog /var/log/warden-lab/modsec/sites/{s}/audit.log';"
             )
+            audit_owner = "root" if p.front == "apache-prefork" else "www-data"
+            plan.dirs.append(DirSpec(f"/var/log/warden-lab/modsec/sites/{s}", audit_owner, "adm", 0o750, "front"))
+        elif modsec == "on" and p.waf.mode in {"concurrent-index", "concurrent-noindex"}:
+            per_site_audit = (
+                f"\n    modsecurity_rules 'SecAuditLog /var/log/warden-lab/modsec/sites/{s}/index; "
+                f"SecAuditLogStorageDir /var/log/warden-lab/modsec/sites/{s}/data';"
+            )
             plan.dirs.append(DirSpec(f"/var/log/warden-lab/modsec/sites/{s}", "www-data", "adm", 0o750, "front"))
+            plan.dirs.append(DirSpec(f"/var/log/warden-lab/modsec/sites/{s}/data", "www-data", "adm", 0o750, "front"))
         listen_block = "\n    ".join(listen)
         headers = _security_headers(prod)
         redirect = ""
@@ -269,6 +277,7 @@ def _nginx(p, ctx, plan, *, internal: bool) -> None:
     )
     if p.waf.mode == "error-log":
         ctx.set("waf_error_log", f"{NGINX_LOG}/{PORTAL}.error.log")
+        ctx.set("waf_error_log_glob", f"{NGINX_LOG}/*.error.log")
 
 
 # --------------------------------------------------------------------------
@@ -290,13 +299,22 @@ def _apache(p, ctx, plan) -> None:
         meta = sites[s]
         php = _apache_php_block(p, s) if True else ""
         this_svc = svc if s == PORTAL else "    # /svc proxies live on the portal vhost"
-        # per-site mode: override the audit log per vhost (SecAuditLog is
-        # allowed in a vhost; the server-scope base set the type and parts).
-        if p.waf.mode == "per-site":
+        # Bind audit records to this virtual host. The audit type/parts are
+        # global; only the destination (and concurrent storage directory) is
+        # overridden in the vhost context.
+        if p.waf.mode in {"serial-native", "serial-json", "per-site"}:
             per_site_audit = f"\n        SecAuditLog /var/log/warden-lab/modsec/sites/{s}/audit.log"
-            plan.dirs.append(DirSpec(f"/var/log/warden-lab/modsec/sites/{s}", "root", "adm", 0o750, "front"))
+            audit_owner = "root" if p.front == "apache-prefork" else "www-data"
+            plan.dirs.append(DirSpec(f"/var/log/warden-lab/modsec/sites/{s}", audit_owner, "adm", 0o750, "front"))
+        elif p.waf.mode in {"concurrent-index", "concurrent-noindex"}:
+            per_site_audit = (
+                f"\n        SecAuditLog /var/log/warden-lab/modsec/sites/{s}/index"
+                f"\n        SecAuditLogStorageDir /var/log/warden-lab/modsec/sites/{s}/data"
+            )
+            plan.dirs.append(DirSpec(f"/var/log/warden-lab/modsec/sites/{s}", "www-data", "adm", 0o750, "front"))
+            plan.dirs.append(DirSpec(f"/var/log/warden-lab/modsec/sites/{s}/data", "www-data", "adm", 0o750, "front"))
         else:
-            per_site_audit = "\n        # (audit log is set at server scope for this mode)"
+            per_site_audit = "\n        # (no serial audit file in error-log mode)"
         vhosts.append(
             render_template(
                 "front/apache-vhost.conf",
@@ -336,6 +354,7 @@ def _apache(p, ctx, plan) -> None:
     # a ports/modules hint file we own (loaded via our conf's listen)
     if p.waf.mode == "error-log":
         ctx.set("waf_error_log", f"{APACHE_LOG}/{PORTAL}.error.log")
+        ctx.set("waf_error_log_glob", f"{APACHE_LOG}/*.error.log")
 
 
 def _apache_php_block(p, site: str) -> str:

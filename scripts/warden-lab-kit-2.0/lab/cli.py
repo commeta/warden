@@ -237,16 +237,12 @@ def cmd_test(args) -> int:
     if args.k:
         argv += ["-k", args.k]
     r = run(argv, check=False, env=env)
-    # util.run captures subprocess output; print it so `labctl test` shows the
-    # actual pytest summary and failure details instead of only the command.
+    # run() captures output for structured CLI logging; pytest's report is
+    # the primary result of this command, so forward both streams verbatim.
     if r.out:
-        sys.stdout.write(r.out)
-        if not r.out.endswith("\n"):
-            sys.stdout.write("\n")
+        print(r.out, end="" if r.out.endswith("\n") else "\n")
     if r.err:
-        sys.stderr.write(r.err)
-        if not r.err.endswith("\n"):
-            sys.stderr.write("\n")
+        print(r.err, file=sys.stderr, end="" if r.err.endswith("\n") else "\n")
     return r.code
 
 
@@ -261,7 +257,7 @@ def cmd_test_upgrade(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="labctl", description="Warden Lab Kit 2.0")
+    ap = argparse.ArgumentParser(prog="labctl", description=f"Warden Lab Kit {VERSION}")
     ap.add_argument("--version", action="version", version=f"labctl {VERSION}")
     ap.add_argument("-p", "--profile", help="path to lab.toml (default ./lab.toml)")
     ap.add_argument("--set", action="append", metavar="key=value", help="override a profile value")

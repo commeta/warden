@@ -32,6 +32,11 @@ def status() -> dict | None:
     return _json(["status"])
 
 
+def fim_status() -> dict | None:
+    data = _json(["fim", "status"])
+    return data if isinstance(data, dict) else None
+
+
 def events(since_id: int = 0, limit: int = 2000, min_severity: str | None = None) -> list[dict]:
     args = ["events", "-n", str(limit)]
     if since_id:

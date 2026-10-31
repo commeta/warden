@@ -14,7 +14,7 @@ ATTACKS = [
 @pytest.mark.parametrize("name,path", ATTACKS)
 def test_attack_is_blocked(attacker, lab, journal, name, path):
     tag = journal.tag()
-    code = attacker.status(f"{path}&t={tag}", host=lab.hostname)
+    code = attacker.status(f"{path}&t={tag}", host=lab.hostname, src=attacker.new_ipv4())
     assert code == 403, f"{name}: expected 403, got {code}"
 
 
@@ -27,5 +27,6 @@ def test_legit_admin_save_is_not_blocked(client, lab):
 @pytest.mark.waf
 def test_modsecurity_recorded_the_request(attacker, lab):
     tag = "wlt" + "0a1b2c3d"
-    attacker.get(f"/lab/xss?q=%3Cscript%3E{tag}%3C/script%3E&t={tag}", host=lab.hostname)
+    attacker.get(f"/lab/xss?q=%3Cscript%3E{tag}%3C/script%3E&t={tag}",
+                 host=lab.hostname, src=attacker.new_ipv4())
     assert modsec.saw_request(lab.p.waf.mode, tag), "ModSecurity did not record the probe"

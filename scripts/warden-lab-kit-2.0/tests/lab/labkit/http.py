@@ -7,6 +7,7 @@ runs directly. Raw-bytes requests support the forgery tests.
 from __future__ import annotations
 
 import ipaddress
+import itertools
 import json
 import os
 import subprocess
@@ -15,6 +16,10 @@ from . import env
 
 KIT = env.KIT
 HTTPCLI = os.path.join(KIT, "lab", "httpcli.py")
+# Warden emits at most one waf.hit per peer per minute. The LAN/loopback
+# attacker harness uses 127/8 source addresses, so allocate a distinct source
+# for each test fixture instead of reusing 127.0.0.2 across test functions.
+_LOOPBACK_ATTACK_IPS = itertools.count(2)
 
 
 class Client:
@@ -31,7 +36,10 @@ class Client:
         if self.p.net.mode in {"loopback", "lan"}:
             if self.role == "client":
                 return self.ep.cli_v4
-            return "127.0.0.2"
+            n = next(_LOOPBACK_ATTACK_IPS)
+            if n > 255:
+                raise RuntimeError("loopback attacker source pool exhausted")
+            return f"127.0.0.{n}"
         net = ipaddress.ip_network(self.ep.atk_v4_range)
         self._v4_seq += 1
         return str(net.network_address + 0x100 + self._v4_seq)

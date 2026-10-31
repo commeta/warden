@@ -26,9 +26,15 @@ switch ($path) {
     case '/alloc': $mb = max(1, min((int)($_GET['mb'] ?? 1), 256)); $s = str_repeat("\x01", $mb*1024*1024); echo 'alloc ' . $mb . ' (' . strlen($s) . ')'; break;
     case '/upload':
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') { http_response_code(405); echo 'POST'; break; }
-        @mkdir($UPLOADS, 0750, true);
+        if (!is_dir($UPLOADS) && !@mkdir($UPLOADS, 0750, true) && !is_dir($UPLOADS)) {
+            http_response_code(500); echo 'upload directory unavailable'; break;
+        }
         $name = preg_replace('/[^A-Za-z0-9._-]/', '_', (string)($_GET['name'] ?? 'upload.bin'));
-        file_put_contents($UPLOADS . '/' . $name, substr((string)file_get_contents('php://input'), 0, 262144));
+        $payload = substr((string)file_get_contents('php://input'), 0, 262144);
+        $written = @file_put_contents($UPLOADS . '/' . $name, $payload);
+        if ($written === false || $written !== strlen($payload)) {
+            http_response_code(500); echo 'upload write failed'; break;
+        }
         echo 'stored uploads/' . $name;
         break;
     default: http_response_code(404); echo 'not found';
