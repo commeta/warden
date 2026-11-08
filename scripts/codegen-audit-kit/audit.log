@@ -1,0 +1,704 @@
+warden@warden:~/codegen-audit-kit-1.2.0$ ./tests/check-kit.sh
+
+==> Writing manifest, hashes and archive
+WARNING: raw bundle failed; compact fallback archive was created. Raw LLVM/ASM and perf.data remain in the audit directory.
+
+Audit directory: /tmp/tmprkl6p6ub/audit
+Audit archive:   /tmp/tmprkl6p6ub/audit.full-analysis.tar.gz
+Archive SHA256:  87c40d6d78f841a594caa76503c337d435ed394cb082ecb7cdbf66f9e827bb02
+OK: syntax, CLI, retry guards, profile diagnostics, instrumentation, perf/strace and archive fallback
+test_complete_split_suite_runs_exact_sensitive_test_last (test_audit.CollectorTests.test_complete_split_suite_runs_exact_sensitive_test_last) ... ok
+test_exact_zero_test_run_is_not_validated (test_audit.CollectorTests.test_exact_zero_test_run_is_not_validated) ... [FAILED] mlock_test_coverage: The exact test did not run once, or mlockall was internally skipped
+ok
+test_fuzz_retry_cannot_hide_later_compiler_failure (test_audit.CollectorTests.test_fuzz_retry_cannot_hide_later_compiler_failure) ... ok
+test_missing_command_fails_but_explicit_optional_probe_can_skip (test_audit.CollectorTests.test_missing_command_fails_but_explicit_optional_probe_can_skip) ... ok
+test_missing_psi_is_incomplete_and_does_not_run_sensitive_test (test_audit.CollectorTests.test_missing_psi_is_incomplete_and_does_not_run_sensitive_test) ... [FAILED] mlock_test_precondition: Memory PSI unavailable or not calm within timeout; see test-memory-pressure.json
+ok
+test_perf_event_csv_requires_numeric_counter_not_only_exit_zero (test_audit.CollectorTests.test_perf_event_csv_requires_numeric_counter_not_only_exit_zero) ... ok
+test_rust_trait_symbols_are_identified_without_stripping (test_audit.CollectorTests.test_rust_trait_symbols_are_identified_without_stripping) ... ok
+test_section_hash_size_survive_temporary_file_cleanup (test_audit.CollectorTests.test_section_hash_size_survive_temporary_file_cleanup) ... ok
+test_self_skip_is_not_validated (test_audit.CollectorTests.test_self_skip_is_not_validated) ... [FAILED] mlock_test_coverage: The exact test did not run once, or mlockall was internally skipped
+ok
+test_standard_profile_with_success_exit_and_bad_json_fails (test_audit.CollectorTests.test_standard_profile_with_success_exit_and_bad_json_fails) ... [FAILED] profile_result_validation: Selected profile JSON results are missing, failed or lack required metrics
+ok
+test_tests_only_rejects_implicit_all_profiles (test_audit.CollectorTests.test_tests_only_rejects_implicit_all_profiles) ... ok
+test_workspace_failure_is_not_hidden_by_isolated_pass (test_audit.CollectorTests.test_workspace_failure_is_not_hidden_by_isolated_pass) ... ok
+test_cli_produces_inventory_for_real_elf (test_codegen.ElfIntegrationTests.test_cli_produces_inventory_for_real_elf) ... ok
+test_empty_disassembly_is_failure (test_codegen.ElfIntegrationTests.test_empty_disassembly_is_failure) ... ok
+test_mca_matching_symbols_are_separate_external_inputs (test_codegen.ElfIntegrationTests.test_mca_matching_symbols_are_separate_external_inputs) ... ok
+test_mca_timeout_preserves_per_symbol_failure_status (test_codegen.ElfIntegrationTests.test_mca_timeout_preserves_per_symbol_failure_status) ... ok
+test_mca_zero_exit_with_diagnostics_fails (test_codegen.ElfIntegrationTests.test_mca_zero_exit_with_diagnostics_fails) ... ok
+test_non_x86_elf_rejected_before_objdump (test_codegen.ElfIntegrationTests.test_non_x86_elf_rejected_before_objdump) ... ok
+test_real_elf_instruction_inventory (test_codegen.ElfIntegrationTests.test_real_elf_instruction_inventory) ... ok
+test_real_mca_when_installed (test_codegen.ElfIntegrationTests.test_real_mca_when_installed) ... ok
+test_symbol_matches_trait_and_inherent (test_codegen.ElfIntegrationTests.test_symbol_matches_trait_and_inherent) ... ok
+test_text_file_is_rejected (test_codegen.InvalidInputTests.test_text_file_is_rejected) ... ok
+test_default_bundle_retains_source_elf_mir (test_pack_followup.BundleTests.test_default_bundle_retains_source_elf_mir) ... ok
+test_diagnostics_omits_code_and_raw_data_and_verifies_hashes (test_pack_followup.BundleTests.test_diagnostics_omits_code_and_raw_data_and_verifies_hashes) ... ok
+test_diagnostics_rejects_raw_data_flags (test_pack_followup.BundleTests.test_diagnostics_rejects_raw_data_flags) ... ok
+test_run_id_cannot_escape_followup_directory (test_pack_followup.BundleTests.test_run_id_cannot_escape_followup_directory) ... ok
+test_aggregate_failure_cannot_fall_back_to_legacy_pass (test_pack_followup.FollowupTests.test_aggregate_failure_cannot_fall_back_to_legacy_pass) ... ok
+test_compiler_error_after_passing_group_is_failure (test_pack_followup.FollowupTests.test_compiler_error_after_passing_group_is_failure) ... ok
+test_requested_unavailable_clippy_fails (test_pack_followup.FollowupTests.test_requested_unavailable_clippy_fails) ... ok
+test_runtime_commands_and_provenance_use_expected_binaries (test_pack_followup.FollowupTests.test_runtime_commands_and_provenance_use_expected_binaries) ... ok
+test_symbolized_binary_is_not_production_fallback (test_pack_followup.FollowupTests.test_symbolized_binary_is_not_production_fallback) ... ok
+test_zero_exit_invalid_profile_results_fail (test_pack_followup.FollowupTests.test_zero_exit_invalid_profile_results_fail) ... ok
+test_zero_exit_invalid_stress_results_fail (test_pack_followup.FollowupTests.test_zero_exit_invalid_stress_results_fail) ... ok
+test_zero_test_log_is_failure (test_pack_followup.FollowupTests.test_zero_test_log_is_failure) ... ok
+test_a_successful_exact_retry_does_not_erase_previous_failure (test_test_support.CargoLogTests.test_a_successful_exact_retry_does_not_erase_previous_failure) ... ok
+test_ansi_and_internal_mlock_skip_are_retained (test_test_support.CargoLogTests.test_ansi_and_internal_mlock_skip_are_retained) ... ok
+test_compiler_error_without_summaries_cannot_validate_tests (test_test_support.CargoLogTests.test_compiler_error_without_summaries_cannot_validate_tests) ... ok
+test_multiple_completed_binaries_count_pass_failed_ignored_separately (test_test_support.CargoLogTests.test_multiple_completed_binaries_count_pass_failed_ignored_separately) ... ok
+test_zero_test_success_is_not_execution (test_test_support.CargoLogTests.test_zero_test_success_is_not_execution) ... ok
+test_exact_upstream_thresholds_and_optional_full_row (test_test_support.MemoryPressureTests.test_exact_upstream_thresholds_and_optional_full_row) ... ok
+test_invalid_deadlines_are_rejected (test_test_support.MemoryPressureTests.test_invalid_deadlines_are_rejected) ... ok
+test_malformed_nonfinite_and_incomplete_data_fail_closed (test_test_support.MemoryPressureTests.test_malformed_nonfinite_and_incomplete_data_fail_closed) ... ok
+test_missing_file_never_establishes_calm (test_test_support.MemoryPressureTests.test_missing_file_never_establishes_calm) ... ok
+test_retains_unknown_future_fields_and_rows (test_test_support.MemoryPressureTests.test_retains_unknown_future_fields_and_rows) ... ok
+test_unavailable_psi_does_not_wait_or_claim_ready (test_test_support.MemoryPressureTests.test_unavailable_psi_does_not_wait_or_claim_ready) ... ok
+test_wait_clips_last_sleep_to_deadline (test_test_support.MemoryPressureTests.test_wait_clips_last_sleep_to_deadline) ... ok
+test_wait_transitions_to_calm_and_preserves_observations (test_test_support.MemoryPressureTests.test_wait_transitions_to_calm_and_preserves_observations) ... ok
+test_zero_timeout_observes_once_without_sleeping (test_test_support.MemoryPressureTests.test_zero_timeout_observes_once_without_sleeping) ... ok
+
+----------------------------------------------------------------------
+Ran 48 tests in 4.842s
+
+OK
+
+warden@warden:~/codegen-audit-kit-1.2.0$ ./run-audit.sh
+
+==> git_init: git init /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/source/warden
+[OK] git_init (0.03s; rc=0)
+
+==> git_remote: git remote add origin https://github.com/commeta/warden.git
+[OK] git_remote (0.0s; rc=0)
+
+==> git_fetch: git fetch --depth 1 origin main
+[OK] git_fetch (1.42s; rc=0)
+
+==> git_checkout: git checkout --detach FETCH_HEAD
+[OK] git_checkout (0.07s; rc=0)
+
+==> source_git_status: git status --short --branch
+[OK] source_git_status (0.03s; rc=0)
+
+==> source_git_commit: git show -s --format=fuller HEAD
+[OK] source_git_commit (0.01s; rc=0)
+
+==> source_git_diff_stat: git diff --stat HEAD
+[OK] source_git_diff_stat (0.03s; rc=0)
+
+==> source_git_diff_binary: git diff --binary HEAD
+[OK] source_git_diff_binary (0.07s; rc=0)
+
+==> Collecting host and toolchain metadata
+
+==> host_uname: uname -a
+[OK] host_uname (0.0s; rc=0)
+
+==> host_lscpu: lscpu
+[OK] host_lscpu (0.01s; rc=0)
+
+==> host_meminfo: bash -lc 'cat /proc/meminfo'
+[OK] host_meminfo (0.02s; rc=0)
+
+==> host_os_release: bash -lc 'cat /etc/os-release'
+[OK] host_os_release (0.02s; rc=0)
+
+==> host_disk: df -hT
+[OK] host_disk (0.01s; rc=0)
+
+==> host_mounts: findmnt -T /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/source/warden
+[OK] host_mounts (0.01s; rc=0)
+
+==> host_perf_sysctls: bash -lc 'for f in /proc/sys/kernel/perf_event_paranoid /proc/sys/kernel/kptr_restrict; do echo "## $f"; cat "$f" 2>/dev/null || true; done'
+[OK] host_perf_sysctls (0.02s; rc=0)
+
+==> host_installed_packages: bash -lc 'dpkg-query -W -f='"'"'${binary:Package}\t${Version}\n'"'"' | sort'
+[OK] host_installed_packages (0.07s; rc=0)
+
+==> rustc_version: rustc -Vv
+[OK] rustc_version (0.03s; rc=0)
+
+==> cargo_version: cargo -V
+[OK] cargo_version (0.02s; rc=0)
+
+==> rustup_show: rustup show
+[OK] rustup_show (0.06s; rc=0)
+
+==> rustup_components: rustup component list --installed
+[OK] rustup_components (0.07s; rc=0)
+
+==> clang_version: clang --version
+[OK] clang_version (0.32s; rc=0)
+
+==> llvm_config: llvm-config --version
+[OK] llvm_config (0.01s; rc=0)
+
+==> objdump_version: objdump --version
+[OK] objdump_version (0.0s; rc=0)
+
+==> readelf_version: readelf --version
+[OK] readelf_version (0.02s; rc=0)
+
+==> perf_version: perf --version
+[OK] perf_version (0.02s; rc=0)
+
+==> valgrind_version: valgrind --version
+[OK] valgrind_version (0.02s; rc=0)
+
+==> linker_version: ld --version
+[OK] linker_version (0.02s; rc=0)
+
+==> lld_version: ld.lld --version
+[OK] lld_version (0.07s; rc=0)
+
+==> gcc_version: gcc --version
+[OK] gcc_version (0.0s; rc=0)
+
+==> rust_target_cpus: rustc --print target-cpus
+[OK] rust_target_cpus (0.07s; rc=0)
+
+==> rust_target_features: rustc --print target-features
+[OK] rust_target_features (0.06s; rc=0)
+
+==> rust_target_cfg: rustc --print cfg
+[OK] rust_target_cfg (0.03s; rc=0)
+
+==> perf_list: perf list
+[OK] perf_list (0.02s; rc=0)
+
+==> llvm_config_targets: llvm-config --targets-built --host-target --build-mode
+[OK] llvm_config_targets (0.01s; rc=0)
+
+==> llvm_mca_version: llvm-mca --version
+[OK] llvm_mca_version (0.03s; rc=0)
+
+==> cargo_metadata: cargo metadata --locked --no-deps --format-version 1
+[OK] cargo_metadata (0.07s; rc=0)
+
+==> cargo_tree_features: cargo tree --locked -e features
+[OK] cargo_tree_features (0.43s; rc=0)
+
+==> cargo_tree_verbose: cargo tree --locked -e normal,build,dev -v
+[OK] cargo_tree_verbose (0.17s; rc=0)
+
+==> build_production_release: cargo build --locked --release --package wardend --bin wardend -vv
+[OK] build_production_release (167.2s; rc=0)
+
+==> build_release_unstripped: cargo build --locked --release --package wardend --bin wardend -vv
+[OK] build_release_unstripped (161.65s; rc=0)
+
+==> build_release_symbolized: cargo build --locked --release --package wardend --bin wardend -vv
+[OK] build_release_symbolized (198.35s; rc=0)
+
+==> extract_text_wardend.production: objcopy --dump-section .text=/home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/build/wardend.production.text /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.production
+[OK] extract_text_wardend.production (0.13s; rc=0)
+
+==> extract_text_wardend.release-unstripped: objcopy --dump-section .text=/home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/build/wardend.release-unstripped.text /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.release-unstripped
+[OK] extract_text_wardend.release-unstripped (0.17s; rc=0)
+
+==> extract_text_wardend.symbolized: objcopy --dump-section .text=/home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/build/wardend.symbolized.text /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.symbolized
+[OK] extract_text_wardend.symbolized (0.42s; rc=0)
+INFO: production/unstripped .text identical=False; see text-section-comparison.json
+
+==> production-stripped_file: file /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.production
+[OK] production-stripped_file (0.03s; rc=0)
+
+==> production-stripped_size: size -A /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.production
+[OK] production-stripped_size (0.0s; rc=0)
+
+==> production-stripped_readelf_header: readelf -h -l -S -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.production
+[OK] production-stripped_readelf_header (0.01s; rc=0)
+
+==> production-stripped_readelf_dynamic: readelf -d -Ws -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.production
+[OK] production-stripped_readelf_dynamic (0.0s; rc=0)
+
+==> production-stripped_readelf_notes: readelf -n /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.production
+[OK] production-stripped_readelf_notes (0.0s; rc=0)
+
+==> production-stripped_nm_symbols: nm -C --defined-only --size-sort -r /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.production
+[OK] production-stripped_nm_symbols (0.12s; rc=0)
+
+==> production-stripped_objdump: objdump -d -C -Mintel /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.production
+[OK] production-stripped_objdump (4.93s; rc=0)
+
+==> production-stripped_llvm_objdump: llvm-objdump --disassemble --demangle /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.production
+[OK] production-stripped_llvm_objdump (7.21s; rc=0)
+
+==> release-unstripped_file: file /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_file (0.02s; rc=0)
+
+==> release-unstripped_size: size -A /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_size (0.0s; rc=0)
+
+==> release-unstripped_readelf_header: readelf -h -l -S -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_readelf_header (0.01s; rc=0)
+
+==> release-unstripped_readelf_dynamic: readelf -d -Ws -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_readelf_dynamic (0.03s; rc=0)
+
+==> release-unstripped_readelf_notes: readelf -n /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_readelf_notes (0.0s; rc=0)
+
+==> release-unstripped_nm_symbols: nm -C --defined-only --size-sort -r /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_nm_symbols (0.07s; rc=0)
+
+==> release-symbolized_file: file /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.symbolized
+[OK] release-symbolized_file (0.02s; rc=0)
+
+==> release-symbolized_size: size -A /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.symbolized
+[OK] release-symbolized_size (0.0s; rc=0)
+
+==> release-symbolized_readelf_header: readelf -h -l -S -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.symbolized
+[OK] release-symbolized_readelf_header (0.0s; rc=0)
+
+==> release-symbolized_readelf_dynamic: readelf -d -Ws -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.symbolized
+[OK] release-symbolized_readelf_dynamic (0.03s; rc=0)
+
+==> release-symbolized_readelf_notes: readelf -n /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.symbolized
+[OK] release-symbolized_readelf_notes (0.0s; rc=0)
+
+==> release-symbolized_nm_symbols: nm -C --defined-only --size-sort -r /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.symbolized
+[OK] release-symbolized_nm_symbols (0.06s; rc=0)
+
+==> release-symbolized_objdump: objdump -d -C -Mintel /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.symbolized
+[OK] release-symbolized_objdump (5.65s; rc=0)
+
+==> release-symbolized_llvm_objdump: llvm-objdump --disassemble --demangle /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.symbolized
+[OK] release-symbolized_llvm_objdump (7.59s; rc=0)
+
+==> rustc_emit_llvm_ir_asm: cargo rustc --locked --release --package wardend --bin wardend -- --emit=llvm-ir,asm
+[OK] rustc_emit_llvm_ir_asm (182.71s; rc=0)
+
+==> cargo_bloat_crates: cargo bloat --locked --release --package wardend --bin wardend --crates
+[OK] cargo_bloat_crates (1.07s; rc=0)
+
+==> cargo_bloat_top200: cargo bloat --locked --release --package wardend --bin wardend -n 200
+[OK] cargo_bloat_top200 (0.67s; rc=0)
+
+==> cargo_llvm_lines: cargo llvm-lines --release --package wardend --bin wardend
+[OK] cargo_llvm_lines (70.19s; rc=0)
+
+==> wardend_final_elf_nm: nm -C -S --defined-only --size-sort -r /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.symbolized
+[OK] wardend_final_elf_nm (0.13s; rc=0)
+
+==> static_machine_code_analysis: /usr/bin/python3 /home/warden/codegen-audit-kit-1.2.0/codegen-analysis.py --production /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.production --unstripped /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.release-unstripped --symbolized /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/artifacts/wardend.symbolized --out /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/reports/codegen --mca-cpu znver1
+[OK] static_machine_code_analysis (149.49s; rc=0)
+
+==> cargo_fmt_check: cargo fmt --all --check
+[OK] cargo_fmt_check (0.82s; rc=0)
+
+==> cargo_clippy_ci_strict: cargo clippy --workspace --all-targets --locked -- -D warnings
+[OK] cargo_clippy_ci_strict (20.43s; rc=0)
+
+==> cargo_test_compile: cargo test --workspace --locked --no-run
+[OK] cargo_test_compile (35.02s; rc=0)
+
+==> cargo_test_ci_root_serial: sudo env PATH=/usr/lib/llvm-18/bin:/home/warden/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin CARGO_HOME=/home/warden/.cargo RUSTUP_HOME=/home/warden/.rustup RUSTUP_TOOLCHAIN=1.99.1 CARGO_TARGET_DIR=/home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/build/tests-ci-root CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test --workspace --locked --no-fail-fast -- --test-threads=1 --skip selfstat::tests::a_peak_is_returned_even_under_mlockall
+[sudo] password for warden: 
+[OK] cargo_test_ci_root_serial (84.74s; rc=0)
+
+==> cargo_test_mlock_isolated: sudo env PATH=/usr/lib/llvm-18/bin:/home/warden/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin CARGO_HOME=/home/warden/.cargo RUSTUP_HOME=/home/warden/.rustup RUSTUP_TOOLCHAIN=1.99.1 CARGO_TARGET_DIR=/home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/build/tests-ci-root CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test --locked --package warden-sys --lib selfstat::tests::a_peak_is_returned_even_under_mlockall -- --exact --nocapture --test-threads=1
+[OK] cargo_test_mlock_isolated (6.81s; rc=0)
+
+==> restore_test_target_ownership: sudo chown -R 1000:1000 /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z/build/tests-ci-root
+[OK] restore_test_target_ownership (0.03s; rc=0)
+
+==> Writing manifest, hashes and archive
+
+Audit directory: /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z
+Audit archive:   /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T211613Z.tar.gz
+Archive SHA256:  31e20b03ddb739a36ed5c54e416df4feeae4b5dd54d11088385cd21129c79ca5
+
+warden@warden:~/codegen-audit-kit-1.2.0$ ./run-full-audit.sh
+
+==> git_init: git init /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/source/warden
+[OK] git_init (0.03s; rc=0)
+
+==> git_remote: git remote add origin https://github.com/commeta/warden.git
+[OK] git_remote (0.01s; rc=0)
+
+==> git_fetch: git fetch --depth 1 origin main
+[OK] git_fetch (1.4s; rc=0)
+
+==> git_checkout: git checkout --detach FETCH_HEAD
+[OK] git_checkout (0.07s; rc=0)
+
+==> source_git_status: git status --short --branch
+[OK] source_git_status (0.03s; rc=0)
+
+==> source_git_commit: git show -s --format=fuller HEAD
+[OK] source_git_commit (0.0s; rc=0)
+
+==> source_git_diff_stat: git diff --stat HEAD
+[OK] source_git_diff_stat (0.03s; rc=0)
+
+==> source_git_diff_binary: git diff --binary HEAD
+[OK] source_git_diff_binary (0.03s; rc=0)
+
+==> Collecting host and toolchain metadata
+
+==> host_uname: uname -a
+[OK] host_uname (0.0s; rc=0)
+
+==> host_lscpu: lscpu
+[OK] host_lscpu (0.01s; rc=0)
+
+==> host_meminfo: bash -lc 'cat /proc/meminfo'
+[OK] host_meminfo (0.02s; rc=0)
+
+==> host_os_release: bash -lc 'cat /etc/os-release'
+[OK] host_os_release (0.01s; rc=0)
+
+==> host_disk: df -hT
+[OK] host_disk (0.0s; rc=0)
+
+==> host_mounts: findmnt -T /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/source/warden
+[OK] host_mounts (0.0s; rc=0)
+
+==> host_perf_sysctls: bash -lc 'for f in /proc/sys/kernel/perf_event_paranoid /proc/sys/kernel/kptr_restrict; do echo "## $f"; cat "$f" 2>/dev/null || true; done'
+[OK] host_perf_sysctls (0.02s; rc=0)
+
+==> host_installed_packages: bash -lc 'dpkg-query -W -f='"'"'${binary:Package}\t${Version}\n'"'"' | sort'
+[OK] host_installed_packages (0.03s; rc=0)
+
+==> rustc_version: rustc -Vv
+[OK] rustc_version (0.33s; rc=0)
+
+==> cargo_version: cargo -V
+[OK] cargo_version (0.11s; rc=0)
+
+==> rustup_show: rustup show
+[OK] rustup_show (0.12s; rc=0)
+
+==> rustup_components: rustup component list --installed
+[OK] rustup_components (0.07s; rc=0)
+
+==> clang_version: clang --version
+[OK] clang_version (0.48s; rc=0)
+
+==> llvm_config: llvm-config --version
+[OK] llvm_config (0.01s; rc=0)
+
+==> objdump_version: objdump --version
+[OK] objdump_version (0.03s; rc=0)
+
+==> readelf_version: readelf --version
+[OK] readelf_version (0.01s; rc=0)
+
+==> perf_version: perf --version
+[OK] perf_version (0.06s; rc=0)
+
+==> valgrind_version: valgrind --version
+[OK] valgrind_version (0.02s; rc=0)
+
+==> linker_version: ld --version
+[OK] linker_version (0.01s; rc=0)
+
+==> lld_version: ld.lld --version
+[OK] lld_version (0.08s; rc=0)
+
+==> gcc_version: gcc --version
+[OK] gcc_version (0.02s; rc=0)
+
+==> rust_target_cpus: rustc --print target-cpus
+[OK] rust_target_cpus (0.13s; rc=0)
+
+==> rust_target_features: rustc --print target-features
+[OK] rust_target_features (0.03s; rc=0)
+
+==> rust_target_cfg: rustc --print cfg
+[OK] rust_target_cfg (0.03s; rc=0)
+
+==> perf_list: perf list
+[OK] perf_list (0.03s; rc=0)
+
+==> llvm_config_targets: llvm-config --targets-built --host-target --build-mode
+[OK] llvm_config_targets (0.0s; rc=0)
+
+==> llvm_mca_version: llvm-mca --version
+[OK] llvm_mca_version (0.03s; rc=0)
+
+==> cargo_metadata: cargo metadata --locked --no-deps --format-version 1
+[OK] cargo_metadata (0.13s; rc=0)
+
+==> cargo_tree_features: cargo tree --locked -e features
+[OK] cargo_tree_features (0.7s; rc=0)
+
+==> cargo_tree_verbose: cargo tree --locked -e normal,build,dev -v
+[OK] cargo_tree_verbose (0.17s; rc=0)
+
+==> build_production_release: cargo build --locked --release --package wardend --bin wardend -vv
+[OK] build_production_release (164.51s; rc=0)
+
+==> build_release_unstripped: cargo build --locked --release --package wardend --bin wardend -vv
+[OK] build_release_unstripped (166.88s; rc=0)
+
+==> build_release_symbolized: cargo build --locked --release --package wardend --bin wardend -vv
+[OK] build_release_symbolized (189.23s; rc=0)
+
+==> extract_text_wardend.production: objcopy --dump-section .text=/home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/build/wardend.production.text /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production
+[OK] extract_text_wardend.production (0.12s; rc=0)
+
+==> extract_text_wardend.release-unstripped: objcopy --dump-section .text=/home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/build/wardend.release-unstripped.text /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.release-unstripped
+[OK] extract_text_wardend.release-unstripped (0.17s; rc=0)
+
+==> extract_text_wardend.symbolized: objcopy --dump-section .text=/home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/build/wardend.symbolized.text /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.symbolized
+[OK] extract_text_wardend.symbolized (0.87s; rc=0)
+INFO: production/unstripped .text identical=False; see text-section-comparison.json
+
+==> production-stripped_file: file /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production
+[OK] production-stripped_file (0.03s; rc=0)
+
+==> production-stripped_size: size -A /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production
+[OK] production-stripped_size (0.0s; rc=0)
+
+==> production-stripped_readelf_header: readelf -h -l -S -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production
+[OK] production-stripped_readelf_header (0.0s; rc=0)
+
+==> production-stripped_readelf_dynamic: readelf -d -Ws -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production
+[OK] production-stripped_readelf_dynamic (0.0s; rc=0)
+
+==> production-stripped_readelf_notes: readelf -n /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production
+[OK] production-stripped_readelf_notes (0.0s; rc=0)
+
+==> production-stripped_nm_symbols: nm -C --defined-only --size-sort -r /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production
+[OK] production-stripped_nm_symbols (0.03s; rc=0)
+
+==> production-stripped_objdump: objdump -d -C -Mintel /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production
+[OK] production-stripped_objdump (4.85s; rc=0)
+
+==> production-stripped_llvm_objdump: llvm-objdump --disassemble --demangle /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production
+[OK] production-stripped_llvm_objdump (7.17s; rc=0)
+
+==> release-unstripped_file: file /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_file (0.03s; rc=0)
+
+==> release-unstripped_size: size -A /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_size (0.0s; rc=0)
+
+==> release-unstripped_readelf_header: readelf -h -l -S -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_readelf_header (0.0s; rc=0)
+
+==> release-unstripped_readelf_dynamic: readelf -d -Ws -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_readelf_dynamic (0.03s; rc=0)
+
+==> release-unstripped_readelf_notes: readelf -n /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_readelf_notes (0.0s; rc=0)
+
+==> release-unstripped_nm_symbols: nm -C --defined-only --size-sort -r /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.release-unstripped
+[OK] release-unstripped_nm_symbols (0.07s; rc=0)
+
+==> release-symbolized_file: file /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.symbolized
+[OK] release-symbolized_file (0.03s; rc=0)
+
+==> release-symbolized_size: size -A /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.symbolized
+[OK] release-symbolized_size (0.0s; rc=0)
+
+==> release-symbolized_readelf_header: readelf -h -l -S -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.symbolized
+[OK] release-symbolized_readelf_header (0.0s; rc=0)
+
+==> release-symbolized_readelf_dynamic: readelf -d -Ws -W /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.symbolized
+[OK] release-symbolized_readelf_dynamic (0.03s; rc=0)
+
+==> release-symbolized_readelf_notes: readelf -n /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.symbolized
+[OK] release-symbolized_readelf_notes (0.0s; rc=0)
+
+==> release-symbolized_nm_symbols: nm -C --defined-only --size-sort -r /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.symbolized
+[OK] release-symbolized_nm_symbols (0.06s; rc=0)
+
+==> release-symbolized_objdump: objdump -d -C -Mintel /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.symbolized
+[OK] release-symbolized_objdump (5.5s; rc=0)
+
+==> release-symbolized_llvm_objdump: llvm-objdump --disassemble --demangle /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.symbolized
+[OK] release-symbolized_llvm_objdump (7.77s; rc=0)
+
+==> rustc_emit_llvm_ir_asm: cargo rustc --locked --release --package wardend --bin wardend -- --emit=llvm-ir,asm
+[OK] rustc_emit_llvm_ir_asm (181.15s; rc=0)
+
+==> rustc_emit_llvm_warden_core: cargo rustc --locked --release --package warden-core --lib -- --emit=llvm-ir,asm
+[OK] rustc_emit_llvm_warden_core (59.67s; rc=0)
+
+==> rustc_emit_llvm_warden_sys: cargo rustc --locked --release --package warden-sys --lib -- --emit=llvm-ir,asm
+[OK] rustc_emit_llvm_warden_sys (11.76s; rc=0)
+
+==> rustc_emit_llvm_warden_detect: cargo rustc --locked --release --package warden-detect --lib -- --emit=llvm-ir,asm
+[OK] rustc_emit_llvm_warden_detect (48.74s; rc=0)
+
+==> rustc_emit_llvm_warden_respond: cargo rustc --locked --release --package warden-respond --lib -- --emit=llvm-ir,asm
+[OK] rustc_emit_llvm_warden_respond (8.89s; rc=0)
+
+==> cargo_bloat_crates: cargo bloat --locked --release --package wardend --bin wardend --crates
+[OK] cargo_bloat_crates (0.72s; rc=0)
+
+==> cargo_bloat_top200: cargo bloat --locked --release --package wardend --bin wardend -n 200
+[OK] cargo_bloat_top200 (0.62s; rc=0)
+
+==> cargo_llvm_lines: cargo llvm-lines --release --package wardend --bin wardend
+[OK] cargo_llvm_lines (66.16s; rc=0)
+
+==> rustc_emit_mir_warden_core: cargo rustc --locked --release --package warden-core --lib -- --emit=mir
+[OK] rustc_emit_mir_warden_core (43.27s; rc=0)
+
+==> rustc_emit_mir_warden_sys: cargo rustc --locked --release --package warden-sys --lib -- --emit=mir
+[OK] rustc_emit_mir_warden_sys (10.08s; rc=0)
+
+==> rustc_emit_mir_warden_detect: cargo rustc --locked --release --package warden-detect --lib -- --emit=mir
+[OK] rustc_emit_mir_warden_detect (41.44s; rc=0)
+
+==> rustc_emit_mir_warden_respond: cargo rustc --locked --release --package warden-respond --lib -- --emit=mir
+[OK] rustc_emit_mir_warden_respond (7.03s; rc=0)
+
+==> rustc_emit_mir_wardend: cargo rustc --locked --release --package wardend --bin wardend -- --emit=mir
+[OK] rustc_emit_mir_wardend (133.0s; rc=0)
+
+==> wardend_final_elf_nm: nm -C -S --defined-only --size-sort -r /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.symbolized
+[OK] wardend_final_elf_nm (0.32s; rc=0)
+
+==> static_machine_code_analysis: /usr/bin/python3 /home/warden/codegen-audit-kit-1.2.0/codegen-analysis.py --production /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production --unstripped /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.release-unstripped --symbolized /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.symbolized --out /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/reports/codegen --mca-cpu znver1
+[OK] static_machine_code_analysis (147.08s; rc=0)
+
+==> cargo_fmt_check: cargo fmt --all --check
+[OK] cargo_fmt_check (0.84s; rc=0)
+
+==> cargo_clippy_ci_strict: cargo clippy --workspace --all-targets --locked -- -D warnings
+[OK] cargo_clippy_ci_strict (18.79s; rc=0)
+
+==> cargo_test_compile: cargo test --workspace --locked --no-run
+[OK] cargo_test_compile (31.87s; rc=0)
+
+==> cargo_test_ci_root_serial: sudo env PATH=/usr/lib/llvm-18/bin:/home/warden/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin CARGO_HOME=/home/warden/.cargo RUSTUP_HOME=/home/warden/.rustup RUSTUP_TOOLCHAIN=1.99.1 CARGO_TARGET_DIR=/home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/build/tests-ci-root CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test --workspace --locked --no-fail-fast -- --test-threads=1 --skip selfstat::tests::a_peak_is_returned_even_under_mlockall
+[sudo] password for warden: 
+[OK] cargo_test_ci_root_serial (101.84s; rc=0)
+
+==> cargo_test_mlock_isolated: sudo env PATH=/usr/lib/llvm-18/bin:/home/warden/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin CARGO_HOME=/home/warden/.cargo RUSTUP_HOME=/home/warden/.rustup RUSTUP_TOOLCHAIN=1.99.1 CARGO_TARGET_DIR=/home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/build/tests-ci-root CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test --locked --package warden-sys --lib selfstat::tests::a_peak_is_returned_even_under_mlockall -- --exact --nocapture --test-threads=1
+[OK] cargo_test_mlock_isolated (6.5s; rc=0)
+
+==> restore_test_target_ownership: sudo chown -R 1000:1000 /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/build/tests-ci-root
+[OK] restore_test_target_ownership (0.03s; rc=0)
+
+==> perf_preflight_cycles: sudo perf stat -x, -e cycles -- /usr/bin/python3 -c 'import time; t=time.monotonic()+0.35; 
+while time.monotonic()<t: sum(range(500))'
+[OK] perf_preflight_cycles (0.47s; rc=0)
+
+==> perf_preflight_instructions: sudo perf stat -x, -e instructions -- /usr/bin/python3 -c 'import time; t=time.monotonic()+0.35; 
+while time.monotonic()<t: sum(range(500))'
+[OK] perf_preflight_instructions (0.42s; rc=0)
+
+==> perf_preflight_branches: sudo perf stat -x, -e branches -- /usr/bin/python3 -c 'import time; t=time.monotonic()+0.35; 
+while time.monotonic()<t: sum(range(500))'
+[OK] perf_preflight_branches (0.42s; rc=0)
+
+==> perf_preflight_branch_misses: sudo perf stat -x, -e branch-misses -- /usr/bin/python3 -c 'import time; t=time.monotonic()+0.35; 
+while time.monotonic()<t: sum(range(500))'
+[OK] perf_preflight_branch_misses (0.42s; rc=0)
+
+==> perf_preflight_cache_references: sudo perf stat -x, -e cache-references -- /usr/bin/python3 -c 'import time; t=time.monotonic()+0.35; 
+while time.monotonic()<t: sum(range(500))'
+[OK] perf_preflight_cache_references (0.42s; rc=0)
+
+==> perf_preflight_cache_misses: sudo perf stat -x, -e cache-misses -- /usr/bin/python3 -c 'import time; t=time.monotonic()+0.35; 
+while time.monotonic()<t: sum(range(500))'
+[OK] perf_preflight_cache_misses (0.42s; rc=0)
+
+==> perf_preflight_task_clock: sudo perf stat -x, -e task-clock -- /usr/bin/python3 -c 'import time; t=time.monotonic()+0.35; 
+while time.monotonic()<t: sum(range(500))'
+[OK] perf_preflight_task_clock (0.42s; rc=0)
+
+==> perf_preflight_context_switches: sudo perf stat -x, -e context-switches -- /usr/bin/python3 -c 'import time; t=time.monotonic()+0.35; 
+while time.monotonic()<t: sum(range(500))'
+[OK] perf_preflight_context_switches (0.42s; rc=0)
+
+==> perf_preflight_page_faults: sudo perf stat -x, -e page-faults -- /usr/bin/python3 -c 'import time; t=time.monotonic()+0.35; 
+while time.monotonic()<t: sum(range(500))'
+[OK] perf_preflight_page_faults (0.4s; rc=0)
+
+==> perf_preflight_record_callgraph: sudo perf record -e task-clock -F 99 -g --call-graph dwarf -o /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/build/perf-preflight.data -- /usr/bin/python3 -c 'import time; t=time.monotonic()+0.35; 
+while time.monotonic()<t: sum(range(500))'
+[OK] perf_preflight_record_callgraph (1.87s; rc=0)
+
+==> perf_preflight_sample_validation: sudo perf script -i /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/build/perf-preflight.data
+[OK] perf_preflight_sample_validation (0.73s; rc=0)
+
+==> instrument_profile_runner: /usr/bin/python3 /home/warden/codegen-audit-kit-1.2.0/instrument-bench.py profile --source /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/source/warden/bench/profile.py --output /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-profile-audit.py --manifest /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-profile-audit.patch.json
+[OK] instrument_profile_runner (0.12s; rc=0)
+
+==> bench_profile_smoke_preflight: sudo /usr/bin/python3 /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-profile-audit.py --wardend /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production --only idle --duration 20 --warmup 0 --interval 1 --out /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-profile-preflight --workdir /tmp/wa-nu1u33jg --no-drop-caches --keep --json
+[OK] bench_profile_smoke_preflight (20.97s; rc=0)
+
+==> restore_profile_preflight_output_ownership: sudo chown -R 1000:1000 /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-profile-preflight
+[OK] restore_profile_preflight_output_ownership (0.02s; rc=0)
+
+==> restore_profile_preflight_workdir_ownership: sudo chown -R 1000:1000 /tmp/wa-nu1u33jg
+[OK] restore_profile_preflight_workdir_ownership (0.02s; rc=0)
+
+==> restore_short_runtime_ownership: sudo chown -R 1000:1000 /tmp/wa-nu1u33jg
+[OK] restore_short_runtime_ownership (0.02s; rc=0)
+
+==> instrument_profile_runner: /usr/bin/python3 /home/warden/codegen-audit-kit-1.2.0/instrument-bench.py profile --source /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/source/warden/bench/profile.py --output /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-profile-audit.py --manifest /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-profile-audit.patch.json
+[OK] instrument_profile_runner (0.07s; rc=0)
+
+==> bench_profile_all_upstream_scenarios: sudo /usr/bin/python3 /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-profile-audit.py --wardend /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production --only idle,memory,cpu,io,stall,limits,network,hardware,kernel,disk,process,exec_storm,integrity,systemd,auth,fim,access_log,waf,health,tuning,all --duration 60 --warmup 15 --interval 1 --out /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-profile --workdir /tmp/wa-c1bmqp0k --no-drop-caches --keep --json
+[OK] bench_profile_all_upstream_scenarios (2180.29s; rc=0)
+
+==> restore_profile_output_ownership: sudo chown -R 1000:1000 /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-profile
+[sudo] password for warden: 
+[OK] restore_profile_output_ownership (200.19s; rc=0)
+
+==> restore_profile_workdir_ownership: sudo chown -R 1000:1000 /tmp/wa-c1bmqp0k
+[OK] restore_profile_workdir_ownership (0.47s; rc=0)
+
+==> restore_short_runtime_ownership: sudo chown -R 1000:1000 /tmp/wa-c1bmqp0k
+[OK] restore_short_runtime_ownership (0.37s; rc=0)
+
+==> instrument_profile_runner: /usr/bin/python3 /home/warden/codegen-audit-kit-1.2.0/instrument-bench.py profile --source /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/source/warden/bench/profile.py --output /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-profile-audit.py --manifest /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-profile-audit.patch.json
+[OK] instrument_profile_runner (0.07s; rc=0)
+
+==> bench_profile_strace_syscall_distribution: sudo env WARDEN_AUDIT_STRACE_SCENARIOS=process,exec_storm,waf,auth WARDEN_AUDIT_STRACE_DIR=/home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-profile-syscalls /usr/bin/python3 /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-profile-audit.py --wardend /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.production --only process,exec_storm,waf,auth --duration 40 --warmup 10 --interval 1 --out /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-profile-syscalls --workdir /tmp/wa-4v6_4lez --no-drop-caches --keep --json
+[OK] bench_profile_strace_syscall_distribution (165.91s; rc=0)
+
+==> restore_short_runtime_ownership: sudo chown -R 1000:1000 /tmp/wa-4v6_4lez
+[OK] restore_short_runtime_ownership (0.03s; rc=0)
+
+==> restore_strace_output_ownership: sudo chown -R 1000:1000 /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-profile-syscalls
+[OK] restore_strace_output_ownership (0.03s; rc=0)
+
+==> instrument_stress_for_perf_stat: /usr/bin/python3 /home/warden/codegen-audit-kit-1.2.0/instrument-bench.py stress --source /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/source/warden/bench/stress.py --output /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-stress-perf.py --manifest /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-stress-perf.patch.json
+[OK] instrument_stress_for_perf_stat (0.07s; rc=0)
+
+==> bench_stress_safe: sudo env TMPDIR=/tmp WARDEN_AUDIT_PERF_EVENTS=task-clock,context-switches,page-faults WARDEN_AUDIT_PERF_STAT=1 WARDEN_AUDIT_PERF_RECORD_EVENT=task-clock /usr/bin/python3 /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/instrumented/bench-stress-perf.py --wardend /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/artifacts/wardend.release-unstripped --only exec_storm,waf_v6_unique,waf_v6_spread,auth_unique --duration 30 --out /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-stress --perf
+[OK] bench_stress_safe (178.79s; rc=0)
+
+==> perf_report_auth_unique: sudo /usr/bin/perf report --stdio -i /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-stress/auth_unique.perf.data --percent-limit 0.5
+[OK] perf_report_auth_unique (2.1s; rc=0)
+
+==> perf_annotate_auth_unique: sudo /usr/bin/perf annotate --stdio -i /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-stress/auth_unique.perf.data
+[OK] perf_annotate_auth_unique (2.98s; rc=0)
+
+==> perf_report_exec_storm: sudo /usr/bin/perf report --stdio -i /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-stress/exec_storm.perf.data --percent-limit 0.5
+[OK] perf_report_exec_storm (3.28s; rc=0)
+
+==> perf_annotate_exec_storm: sudo /usr/bin/perf annotate --stdio -i /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-stress/exec_storm.perf.data
+[OK] perf_annotate_exec_storm (7.94s; rc=0)
+
+==> perf_report_waf_v6_spread: sudo /usr/bin/perf report --stdio -i /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-stress/waf_v6_spread.perf.data --percent-limit 0.5
+[OK] perf_report_waf_v6_spread (2.93s; rc=0)
+
+==> perf_annotate_waf_v6_spread: sudo /usr/bin/perf annotate --stdio -i /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-stress/waf_v6_spread.perf.data
+[OK] perf_annotate_waf_v6_spread (5.39s; rc=0)
+
+==> perf_report_waf_v6_unique: sudo /usr/bin/perf report --stdio -i /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-stress/waf_v6_unique.perf.data --percent-limit 0.5
+[OK] perf_report_waf_v6_unique (9.57s; rc=0)
+
+==> perf_annotate_waf_v6_unique: sudo /usr/bin/perf annotate --stdio -i /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-stress/waf_v6_unique.perf.data
+[OK] perf_annotate_waf_v6_unique (13.36s; rc=0)
+
+==> restore_stress_output_ownership: sudo chown -R 1000:1000 /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z/runtime-stress
+[OK] restore_stress_output_ownership (0.02s; rc=0)
+
+==> Writing manifest, hashes and archive
+
+Audit directory: /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z
+Audit archive:   /home/warden/codegen-audit-kit-1.2.0/results/warden-code-audit-20261108T195308Z.full-analysis.tar.gz
+Archive SHA256:  137ba58839d5fa309597db398888ad0f85d5b257b1e87470346d700515b6c48c
